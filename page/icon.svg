@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <defs>
+    <linearGradient id="ctxGrad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="50%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#A855F7"/>
+    </linearGradient>
+    <linearGradient id="lensGrad" x1="8" y1="8" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#06B6D4"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+  <!-- Context Stack Layers -->
+  <path d="M4 7L12 3L20 7L12 11L4 7Z" stroke="url(#ctxGrad)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M4 12L12 16L20 12" stroke="url(#ctxGrad)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>
+  <path d="M4 17L12 21L20 17" stroke="url(#ctxGrad)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>
+  <!-- Focus & Growth Lens -->
+  <circle cx="15.5" cy="13.5" r="4.5" fill="#121214" fill-opacity="0.85" stroke="url(#lensGrad)" stroke-width="2"/>
+  <path d="M18.7 16.7L21.5 19.5" stroke="url(#lensGrad)" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- Pulse spark in lens -->
+  <path d="M13.5 13.5H17.5M15.5 11.5V15.5" stroke="#38BDF8" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

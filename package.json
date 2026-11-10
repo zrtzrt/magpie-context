@@ -1,0 +1,53 @@
+{
+  "name": "magpie-context",
+  "version": "1.0.0",
+  "description": "Magpie 上下文透视与增长监控插件 (对标 dsh-context) - 跨 Agent 会话内容与上下文增长可视化、Token 分布及压缩事件追踪",
+  "main": "index.js",
+  "kind": "middleware",
+  "files": [
+    "index.js",
+    "daemon.mjs",
+    "page",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "magpie",
+    "magpie-plugin",
+    "magpie-page",
+    "magpie-middleware",
+    "context",
+    "context-window",
+    "token-growth",
+    "dsh-context",
+    "observability",
+    "ai-agents"
+  ],
+  "author": "zrtzrt <519539110@qq.com>",
+  "license": "MIT",
+  "magpie": {
+    "name": "上下文透视 (Context Lens)",
+    "kind": "middleware",
+    "summary": {
+      "zh": "跨 Agent 会话内容与上下文增长可视化插件 - 实时追踪 System/User/Assistant/Tools Token 构成、压缩事件与单轮内容透视 (对标 dsh-context)",
+      "en": "Cross-agent context evolution & message inspector - track token composition, compaction events & full turn payloads (inspired by dsh-context)"
+    },
+    "page": {
+      "title": "上下文透视",
+      "titles": {
+        "zh": "上下文透视",
+        "zh-TW": "上下文透視",
+        "en": "Context Lens",
+        "ja": "コンテキスト透過"
+      },
+      "file": "page/index.html",
+      "icon": "page/icon.svg"
+    },
+    "permissions": [
+      "usage:summary",
+      "providers:list"
+    ],
+    "middleware": "./index.js"
+  }
+}

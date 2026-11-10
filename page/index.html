@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>上下文透视 · Context Lens</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="_magpie/bridge.js"></script>
+  <script src="context-data.js"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <!-- 顶部 Header -->
+  <header class="app-header">
+    <div class="brand-wrap">
+      <img src="icon.svg" class="brand-icon" alt="Context Lens">
+      <div>
+        <div class="brand-title">
+          <span>上下文透视</span>
+          <span class="brand-sub">(Context Lens)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 过滤器与控制项 -->
+    <div class="header-controls">
+      <div class="filter-pills" role="tablist" id="agent-filter-pills">
+        <button type="button" class="filter-btn active" data-agent="all" role="tab">全部</button>
+        <button type="button" class="filter-btn" data-agent="antigravity" role="tab">Antigravity</button>
+        <button type="button" class="filter-btn" data-agent="dsh" role="tab">DSH</button>
+        <button type="button" class="filter-btn" data-agent="codex" role="tab">Codex</button>
+        <button type="button" class="filter-btn" data-agent="live" role="tab">⚡ 实时网关</button>
+      </div>
+
+      <button type="button" class="btn-icon" id="btn-refresh" title="刷新数据">
+        <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5c2 0 3.5 1 4.5 2.5"/>
+          <polyline points="12.5 1 12.5 5 8.5 5"/>
+        </svg>
+        <span>刷新</span>
+      </button>
+
+      <button type="button" class="btn-icon" id="btn-theme-toggle" title="切换浅色/深色主题">
+        <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
+          <circle cx="8" cy="8" r="4"/>
+          <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- 全局 KPI 概览 -->
+  <section class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-title">
+        <span>当前会话水位</span>
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l2 2"/></svg>
+      </div>
+      <div class="kpi-val" id="kpi-watermark">0%</div>
+      <div class="gauge-bar-wrap">
+        <div class="gauge-bar" id="kpi-watermark-bar" style="width: 0%; background: var(--green);"></div>
+      </div>
+      <div class="kpi-sub" id="kpi-watermark-sub">0 / 128k Tokens</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-title">
+        <span>峰值上下文</span>
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="2 12 6 8 10 11 14 4"/></svg>
+      </div>
+      <div class="kpi-val" id="kpi-peak-tokens">0</div>
+      <div class="kpi-sub" id="kpi-peak-sub">当前会话最高轮次</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-title">
+        <span>总交互轮次</span>
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="10" height="10" rx="2"/><line x1="3" y1="7" x2="13" y2="7"/></svg>
+      </div>
+      <div class="kpi-val" id="kpi-turns-count">0</div>
+      <div class="kpi-sub" id="kpi-turns-sub">0 条系统/用户消息</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-title">
+        <span>压缩 / 剪枝事件 (✂)</span>
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="5" r="3"/><circle cx="5" cy="11" r="3"/><path d="M7 6l6 6M7 10l6-6"/></svg>
+      </div>
+      <div class="kpi-val" style="color: var(--amber);" id="kpi-compactions">0 次</div>
+      <div class="kpi-sub" id="kpi-compactions-sub">释放历史上下文压力</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-title">
+        <span>累计活跃会话</span>
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4z"/></svg>
+      </div>
+      <div class="kpi-val" id="kpi-sessions-total">0</div>
+      <div class="kpi-sub">已连接 Magpie 的 Agent 会话</div>
+    </div>
+  </section>
+
+  <!-- 主布局：左侧会话列表 + 右侧演进大盘与内容透视 -->
+  <main class="main-layout">
+    <!-- 左侧侧边栏：会话列表 -->
+    <aside class="sessions-sidebar">
+      <div class="search-box">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="6.5" cy="6.5" r="4.5"/>
+          <line x1="10" y1="10" x2="14" y2="14"/>
+        </svg>
+        <input type="search" id="session-search-input" placeholder="搜索会话名称或工作区..." spellcheck="false" autocomplete="off">
+      </div>
+
+      <div class="sessions-list" id="sessions-list">
+        <!-- 动态渲染会话卡片 -->
+      </div>
+    </aside>
+
+    <!-- 右侧：演进曲线与内容透视 -->
+    <section class="content-stage">
+      <!-- 1. 上下文增长演进曲线卡片 (对标 dsh-context 图表) -->
+      <div class="chart-card">
+        <div class="card-header">
+          <div class="card-title-group">
+            <div class="card-title">
+              <span id="active-session-title">正在加载会话...</span>
+            </div>
+            <div class="card-desc" id="active-session-desc">模型: -- · 上下文上限: --</div>
+          </div>
+
+          <!-- 分层颜色图例 (Legend Pills) -->
+          <div class="chart-legends">
+            <div class="legend-item" title="系统提示词、身份与行为指引">
+              <span class="legend-dot" style="background: var(--c-system);"></span>
+              <span>System</span>
+            </div>
+            <div class="legend-item" title="声明的工具函数与参数模式">
+              <span class="legend-dot" style="background: var(--c-tools);"></span>
+              <span>Tools</span>
+            </div>
+            <div class="legend-item" title="用户请求与助手回复历史">
+              <span class="legend-dot" style="background: var(--c-user);"></span>
+              <span>Chat History</span>
+            </div>
+            <div class="legend-item" title="工具执行输出、文件内容与终端结果 (上下文膨胀主要源头)">
+              <span class="legend-dot" style="background: var(--c-toolres);"></span>
+              <span>Tool Results</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Canvas 曲线图与 Tooltip 浮层 -->
+        <div class="chart-wrap">
+          <canvas id="evolutionChart"></canvas>
+          <div class="chart-tooltip" id="chart-tooltip"></div>
+        </div>
+
+        <!-- 轮次快速选择栏 -->
+        <div class="turns-scrubber-bar">
+          <div style="font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase;">
+            交互轮次 (Turns):
+          </div>
+          <div class="turns-selector" id="turns-selector">
+            <!-- 动态生成 Turn 1, Turn 2... 按钮 -->
+          </div>
+          <div style="font-size: 11px; color: var(--muted);">
+            点击轮次透视对应内容
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 会话单轮具体内容透视 (Inspector) -->
+      <div class="inspector-card">
+        <div class="inspector-meta-row">
+          <div class="turn-kpis">
+            <div class="turn-kpi-item">
+              <span>当前选定轮次</span>
+              <span id="inspect-turn-idx">Turn #1</span>
+            </div>
+            <div class="turn-kpi-item">
+              <span>总 Token 规模</span>
+              <span id="inspect-turn-tokens" style="color: var(--fg);">0 Tokens</span>
+            </div>
+            <div class="turn-kpi-item">
+              <span>较上一轮变化</span>
+              <span id="inspect-turn-delta" style="color: var(--green);">+0</span>
+            </div>
+            <div class="turn-kpi-item">
+              <span>上下文占比</span>
+              <span id="inspect-turn-percent">0%</span>
+            </div>
+          </div>
+
+          <!-- 消息角色筛选 -->
+          <div class="filter-pills" role="tablist" id="role-filter-pills">
+            <button type="button" class="filter-btn active" data-role="all" role="tab">全部</button>
+            <button type="button" class="filter-btn" data-role="user" role="tab">User</button>
+            <button type="button" class="filter-btn" data-role="assistant" role="tab">Assistant</button>
+            <button type="button" class="filter-btn" data-role="tool" role="tab">Tools</button>
+          </div>
+        </div>
+
+        <!-- 消息流透视列表 -->
+        <div class="messages-stream" id="messages-stream">
+          <!-- 动态渲染消息流卡片 -->
+        </div>
+      </div>
+
+      <!-- 3. 上下文诊断与体检 (Diagnostics & Headroom) -->
+      <div class="diagnostics-section">
+        <!-- 左侧：Top 上下文消耗源 -->
+        <div class="table-card">
+          <div class="table-title">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="var(--amber)" stroke-width="2">
+              <path d="M8 1v14M1 8h14"/>
+            </svg>
+            <span>Top 上下文消耗源 (Top Token Consumers)</span>
+          </div>
+          <table class="diag-table">
+            <thead>
+              <tr>
+                <th>操作类型 / 文件</th>
+                <th>对应轮次</th>
+                <th>消耗 Token</th>
+                <th>占比</th>
+              </tr>
+            </thead>
+            <tbody id="top-consumers-tbody">
+              <!-- 动态渲染 Top 消耗列表 -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 右侧：上下文健康度建议 -->
+        <div class="table-card">
+          <div class="table-title">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="var(--green)" stroke-width="2">
+              <circle cx="8" cy="8" r="6"/><polyline points="5 8 7 10 11 6"/>
+            </svg>
+            <span>上下文优化建议 (Context Health)</span>
+          </div>
+          <div id="health-tips-container" style="font-size: 12px; color: var(--fg-2); line-height: 1.7; display: flex; flex-direction: column; gap: 8px;">
+            <!-- 动态生成诊断与优化提示 -->
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast-msg" hidden></div>
+</body>
+</html>
