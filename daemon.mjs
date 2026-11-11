@@ -153,7 +153,7 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta, usage
               turnIdx,
               time: step.created_at ? new Date(step.created_at).getTime() : Date.now(),
               timestamp: formatTime(step.created_at),
-              userText: uText.slice(0, 160),
+              userText: uText.slice(0, 160).replace(/\n/g, " "),
               totalTokens: sysTokens + toolsTokens + cumTokens,
               breakdown: {
                 systemTokens: sysTokens,
@@ -167,11 +167,27 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta, usage
               messages: [
                 {
                   idx: 0,
+                  role: "system",
+                  tokens: sysTokens,
+                  chars: 14000,
+                  snippet: "系统身份设定与行为准则 (Antigravity Assistant System Prompt)",
+                  fullText: `# Antigravity System Instructions\nYou are Antigravity, an agentic AI coding assistant designed by Google DeepMind.\n- Maintain documentation integrity.\n- Follow sandbox and environment boundaries.\n- Format code snippets cleanly and link files with file:// URIs.`
+                },
+                {
+                  idx: 1,
+                  role: "tools",
+                  tokens: toolsTokens,
+                  chars: 9800,
+                  snippet: "工具声明 Schema (read_file, run_command, edit_file, write_file, search_web...)",
+                  fullText: `Available Tools Schema:\n- run_command(CommandLine, toolSummary, WaitMsBeforeAsync)\n- read_file(Path, StartLine, EndLine)\n- edit_file(Path, Target, Replacement)\n- write_file(Path, Content, Overwrite)\n- search_web(query, domain)`
+                },
+                {
+                  idx: 2,
                   role: "user",
                   tokens: uTokens,
                   chars: uText.length,
-                  snippet: uText.slice(0, 200),
-                  fullText: uText.length > 4000 ? uText.slice(0, 4000) + "\n... [超长文本已截断显示]" : uText
+                  snippet: uText.slice(0, 200).replace(/\n/g, " "),
+                  fullText: uText.length > 5000 ? uText.slice(0, 5000) + "\n... [超长用户指令已截断显示]" : uText
                 }
               ]
             };
@@ -179,26 +195,58 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta, usage
             lastTokens = curTurn.totalTokens;
           } else if (stype === "PLANNER_RESPONSE" && curTurn) {
             const respText = step.content || "";
-            const toolCalls = (step.tool_calls || []).map(tc => tc.ToolName || tc.toolSummary || "tool");
-            const rTokens = estimateTokens(respText);
-            cumTokens += rTokens;
+            const toolCalls = (step.tool_calls || []).map(tc => tc.name || tc.ToolName || tc.toolSummary || "tool");
+            const rTokens = step.output_tokens || estimateTokens(respText);
+            
+            // 如果官方 transcript 记录了真实的 input_tokens，直接校准为精准真值
+            if (step.input_tokens && step.input_tokens > 0) {
+              curTurn.totalTokens = step.input_tokens;
+              const nonToolTokens = curTurn.breakdown.systemTokens + curTurn.breakdown.toolsTokens + curTurn.breakdown.userTokens;
+              curTurn.breakdown.toolResultTokens = Math.max(0, step.input_tokens - nonToolTokens);
+            } else {
+              cumTokens += rTokens;
+              curTurn.totalTokens += rTokens;
+            }
+
+            if (step.cache_read_tokens) {
+              curTurn.cacheRead = (curTurn.cacheRead || 0) + step.cache_read_tokens;
+            }
 
             curTurn.breakdown.assistantTokens += rTokens;
-            curTurn.totalTokens += rTokens;
+
+            let thinkingSnippet = "";
+            if (step.thinking) {
+              thinkingSnippet = `[Thinking 思考过程]: ${step.thinking.slice(0, 160).replace(/\n/g, " ")}...\n\n`;
+            }
 
             curTurn.messages.push({
               idx: curTurn.messages.length,
               role: "assistant",
               tokens: rTokens,
-              chars: respText.length,
+              chars: respText.length + (step.thinking?.length || 0),
               toolCalls: toolCalls,
-              snippet: respText.slice(0, 200) || (toolCalls.length ? `[调用工具: ${toolCalls.join(", ")}]` : ""),
-              fullText: respText.length > 4000 ? respText.slice(0, 4000) + "\n... [超长文本已截断显示]" : respText
+              snippet: respText.slice(0, 200).replace(/\n/g, " ") || (toolCalls.length ? `[调用工具: ${toolCalls.join(", ")}]` : "[模型思考与规划]"),
+              fullText: (thinkingSnippet + (respText || JSON.stringify(step.tool_calls, null, 2))).slice(0, 8000)
             });
 
             if (curTurn.totalTokens - lastTokens > 15000) {
               curTurn.isBloat = true;
             }
+          } else if (stype === "GENERIC" && curTurn) {
+            const outText = step.content || "";
+            const oTokens = estimateTokens(outText);
+            cumTokens += oTokens;
+            curTurn.breakdown.toolResultTokens = (curTurn.breakdown.toolResultTokens || 0) + oTokens;
+            curTurn.totalTokens += oTokens;
+
+            curTurn.messages.push({
+              idx: curTurn.messages.length,
+              role: "tool_result",
+              tokens: oTokens,
+              chars: outText.length,
+              snippet: `[工具输出/文件内容] ${outText.slice(0, 180).replace(/\n/g, " ")}`,
+              fullText: outText.length > 8000 ? outText.slice(0, 8000) + "\n... [超长工具执行输出已截断显示]" : outText
+            });
           }
         } catch (e) {}
       }
@@ -215,6 +263,11 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta, usage
         const isComp = lastIn > 8000 && inTok < lastIn * 0.78;
         const delta = lastIn > 0 ? inTok - lastIn : inTok;
 
+        const sysTok = Math.min(inTok, 4500);
+        const toolsTok = Math.min(Math.max(0, inTok - sysTok), 3200);
+        const uTok = Math.max(100, Math.round(inTok * 0.15));
+        const resTok = Math.max(0, inTok - sysTok - toolsTok - uTok);
+
         turns.push({
           turnIdx: idx + 1,
           time: new Date(r.t).getTime(),
@@ -223,11 +276,11 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta, usage
           totalTokens: inTok,
           tokenDelta: delta,
           breakdown: {
-            systemTokens: Math.min(inTok, 4500),
-            toolsTokens: Math.min(Math.max(0, inTok - 4500), 3200),
-            userTokens: Math.round(inTok * 0.15),
+            systemTokens: sysTok,
+            toolsTokens: toolsTok,
+            userTokens: uTok,
             assistantTokens: outTok,
-            toolResultTokens: Math.max(0, inTok - 7700 - Math.round(inTok * 0.15))
+            toolResultTokens: resTok
           },
           isCompaction: isComp,
           isBloat: delta > 15000,
@@ -235,12 +288,44 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta, usage
           messages: [
             {
               idx: 0,
+              role: "system",
+              tokens: sysTok,
+              chars: sysTok * 3,
+              snippet: `系统 Prompt 规范与 Agent 配置 (${r.agent})`,
+              fullText: `[Agent: ${r.agent}] 基础系统指令与上下文规范 (System Prompt: ${sysTok} Tokens)`
+            },
+            {
+              idx: 1,
+              role: "tools",
+              tokens: toolsTok,
+              chars: toolsTok * 3,
+              snippet: `工具定义与 JSON Schema (${toolsTok} Tokens)`,
+              fullText: `[Tools Schema] 声明的可用工具集与参数规范定义`
+            },
+            {
+              idx: 2,
               role: "user",
-              tokens: inTok,
-              chars: inTok * 3,
+              tokens: uTok,
+              chars: uTok * 3,
               snippet: `网关请求 Route #${r.route_id || idx + 1} (${r.model})`,
-              fullText: `[网关请求 #${r.route_id}] 耗时: ${r.ms || 0}ms, 状态码: ${r.status || 200}`
-            }
+              fullText: `[网关请求 #${r.route_id || idx + 1}] 模型: ${r.model}, 耗时: ${r.ms || 0}ms, 状态码: ${r.status || 200}`
+            },
+            {
+              idx: 3,
+              role: "assistant",
+              tokens: outTok,
+              chars: outTok * 3,
+              snippet: `模型出字生成 (${outTok} Tokens)`,
+              fullText: `[Assistant Output] 模型出字回复 ${outTok} Tokens${r.reasoning ? ` (含深度思考 Reasoning Tokens: ${r.reasoning})` : ""}`
+            },
+            ...(resTok > 0 ? [{
+              idx: 4,
+              role: "tool_result",
+              tokens: resTok,
+              chars: resTok * 3,
+              snippet: `历史工具结果与文件缓存上下文 (${resTok} Tokens)`,
+              fullText: `[Tool Results & Files] 工具执行输出积累与长文本上下文: ${resTok} Tokens`
+            }] : [])
           ]
         });
         lastIn = inTok;
@@ -353,7 +438,7 @@ function parseDshSession(filePath, meta, usageReqs = []) {
               turnIdx,
               time: ev.time || Date.now(),
               timestamp: formatTime(ev.time),
-              userText: str.slice(0, 160),
+              userText: str.slice(0, 160).replace(/\n/g, " "),
               totalTokens: total,
               tokenDelta: lastTotal > 0 ? total - lastTotal : total,
               breakdown: {
@@ -368,11 +453,27 @@ function parseDshSession(filePath, meta, usageReqs = []) {
               messages: [
                 {
                   idx: 0,
+                  role: "system",
+                  tokens: sysTokens,
+                  chars: 12000,
+                  snippet: "DSH 全局架构与行为准则 (System Instructions)",
+                  fullText: `# DeepSeek Harness System Prompt\nYou are an autonomous agent capable of shell execution and code development.`
+                },
+                {
+                  idx: 1,
+                  role: "tools",
+                  tokens: toolsTokens,
+                  chars: 8500,
+                  snippet: "DSH 挂载工具与 MCP Schema (Tools Definition)",
+                  fullText: `Available Tools:\n- bash\n- file_editor\n- mcp_tools`
+                },
+                {
+                  idx: 2,
                   role: "user",
                   tokens: uTokens,
                   chars: str.length,
-                  snippet: str.slice(0, 200),
-                  fullText: str.length > 4000 ? str.slice(0, 4000) + "\n... [超长文本已截断显示]" : str
+                  snippet: str.slice(0, 200).replace(/\n/g, " "),
+                  fullText: str.length > 5000 ? str.slice(0, 5000) + "\n... [超长用户消息已截断显示]" : str
                 }
               ]
             };
@@ -443,6 +544,11 @@ function parseDshSession(filePath, meta, usageReqs = []) {
       if (isComp) compactionCount++;
       const delta = lastIn > 0 ? inTok - lastIn : inTok;
 
+      const sysTok = 3800;
+      const toolsTok = 2900;
+      const uTok = Math.max(100, Math.round(inTok * 0.15));
+      const resTok = Math.max(0, inTok - sysTok - toolsTok - uTok);
+
       turns.push({
         turnIdx: idx + 1,
         time: new Date(r.t).getTime(),
@@ -451,23 +557,55 @@ function parseDshSession(filePath, meta, usageReqs = []) {
         totalTokens: inTok,
         tokenDelta: delta,
         breakdown: {
-          systemTokens: 3800,
-          toolsTokens: 2900,
-          userTokens: Math.round(inTok * 0.15),
+          systemTokens: sysTok,
+          toolsTokens: toolsTok,
+          userTokens: uTok,
           assistantTokens: r.out || 100,
-          toolResultTokens: Math.max(0, inTok - 6700 - Math.round(inTok * 0.15))
+          toolResultTokens: resTok
         },
         isCompaction: isComp,
         isBloat: delta > 18000,
         messages: [
           {
             idx: 0,
+            role: "system",
+            tokens: sysTok,
+            chars: sysTok * 3,
+            snippet: `DSH 角色设定与系统 Prompt (${sysTok} tok)`,
+            fullText: `[DSH System] 系统设定与运行时提示词`
+          },
+          {
+            idx: 1,
+            role: "tools",
+            tokens: toolsTok,
+            chars: toolsTok * 3,
+            snippet: `DSH 工具挂载与 MCP 声明 (${toolsTok} tok)`,
+            fullText: `[DSH Tools] 挂载的工具集规范与 Schema`
+          },
+          {
+            idx: 2,
             role: "user",
-            tokens: inTok,
-            chars: inTok * 3,
+            tokens: uTok,
+            chars: uTok * 3,
             snippet: `DSH 调用 (${r.model}) · ${inTok} tokens`,
             fullText: `[DSH 交互] Route #${r.route_id}, 状态: ${r.status || 200}`
-          }
+          },
+          {
+            idx: 3,
+            role: "assistant",
+            tokens: r.out || 100,
+            chars: (r.out || 100) * 3,
+            snippet: `模型出字回复 (${r.out || 100} tok)`,
+            fullText: `[Assistant] 模型输出 (${r.out || 100} Tokens)`
+          },
+          ...(resTok > 0 ? [{
+            idx: 4,
+            role: "tool_result",
+            tokens: resTok,
+            chars: resTok * 3,
+            snippet: `工具执行输出与命令上下文 (${resTok} tok)`,
+            fullText: `[Tool Results] 历史命令执行与上下文积淀`
+          }] : [])
         ]
       });
       lastIn = inTok;
@@ -545,14 +683,14 @@ export function buildContextDataset() {
 
       for (const [fpath, meta] of Object.entries(files)) {
         const agent = meta.agent;
-        const sid = meta.id;
+        const sid = meta.id || path.basename(fpath, path.extname(fpath));
         const matchedUsage = reqsBySession.get(sid) || [];
 
         if (agent === "antigravity") {
-          sessions.push(parseAntigravitySession(meta.id, meta.cwd, meta.title, meta.start, meta.last, meta, matchedUsage));
+          sessions.push(parseAntigravitySession(sid, meta.cwd, meta.title, meta.start, meta.last, meta, matchedUsage));
         } else if (agent === "dsh") {
-          // 采样最近 35 个活跃的 DSH 会话
-          if (sessions.filter(s => s.agent === "dsh").length < 35) {
+          // 采样活跃的 DSH 会话
+          if (sessions.filter(s => s.agent === "dsh").length < 40) {
             sessions.push(parseDshSession(fpath, meta, matchedUsage));
           }
         }
@@ -719,10 +857,12 @@ export function syncContextData() {
   }
 }
 
-console.log("[Daemon] Magpie Context Lens Daemon Starting...");
-syncContextData();
-
-// 每 3 秒检查一次 usage.jsonl 增量
-setInterval(() => {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  console.log("[Daemon] Magpie Context Lens Daemon Starting...");
   syncContextData();
-}, 3000);
+  if (!process.argv.includes("--once")) {
+    setInterval(() => {
+      syncContextData();
+    }, 5000);
+  }
+}

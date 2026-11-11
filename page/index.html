@@ -19,7 +19,7 @@
         <span class="brand-name">上下文透视</span>
       </div>
 
-      <!-- Agent 专属分段筛选栏 (按 Agent 列出所有会话) -->
+      <!-- Agent 专属分段筛选栏 -->
       <div class="segs" id="agentSegs" role="tablist">
         <button type="button" class="opt on" data-agent="all" role="tab">
           <span>全部</span>
@@ -44,14 +44,14 @@
       </div>
     </div>
 
-    <div style="display: flex; align-items: center; gap: 8px;">
+    <div class="sess-tools-right">
       <!-- 官方风格搜索框 -->
       <div class="sess-filter-wrap">
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="6.5" cy="6.5" r="4.5"/>
           <line x1="10" y1="10" x2="14" y2="14"/>
         </svg>
-        <input type="search" id="sessQ" placeholder="搜索会话标题、路径、模型..." spellcheck="false" autocomplete="off">
+        <input type="search" id="sessQ" placeholder="搜索会话、工作区目录、模型..." spellcheck="false" autocomplete="off">
       </div>
 
       <button type="button" class="tool-btn" id="btnRefresh" title="同步最新数据">
@@ -100,47 +100,60 @@
     </div>
   </section>
 
-  <!-- 主布局：左侧会话列表 + 右侧 dsh-context 风格大盘 -->
-  <main class="layout-container" id="mainLayout">
-    <!-- 左侧：会话列表列 -->
-    <div class="sessions-column">
-      <div class="list sess-list" id="sessList">
-        <!-- 动态生成 .row.sess.sess-link 列表 -->
-      </div>
-    </div>
+  <!-- 提示条 -->
+  <div class="hint-banner">
+    <span>💡 列表已按<b>工作区目录</b>分类组织，点击左侧箭头可折叠/展开；点击任意会话即可<b>弹出 dsh-context 上下文深度透视</b>窗口。</span>
+  </div>
 
-    <!-- 右侧：上下文详情仪表板 (参考 dsh-context 布局) -->
-    <div class="detail-column">
-      <section class="dsh-context-card">
-        <!-- 移动端返回按钮与详情头部 -->
-        <div class="context-header-banner">
-          <div class="banner-left">
-            <button type="button" class="banner-nav-btn" id="btnBackToList">
-              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="10 13 5 8 10 3"/>
-              </svg>
-              <span>返回全部会话</span>
-            </button>
-            <div class="banner-title" id="detTitle">选择一个会话查看上下文详情</div>
-            <div class="banner-sub" id="detSub">
+  <!-- 会话树容器 (严格对标官方 .sm-tree 与 .sm-folders) -->
+  <main class="sm-tree">
+    <div class="list sm-folders" id="workspaceTree">
+      <!-- 动态按工作区聚类渲染 .sm-group -->
+    </div>
+  </main>
+
+  <!-- 上下文透视 Modal 弹窗 (点击会话弹出显示) -->
+  <div class="modal" id="contextModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="dialog wide">
+      <!-- 弹窗顶部栏 -->
+      <header class="modal-head">
+        <div class="modal-head-left">
+          <div class="modal-agent-handle" id="modalAgentIcon"></div>
+          <div class="modal-title-wrap">
+            <h2 class="modal-title" id="modalTitle">会话上下文详情</h2>
+            <div class="modal-sub" id="modalSub">
+              <span>Agent: --</span>
+              <span>·</span>
               <span>模型: --</span>
               <span>·</span>
-              <span>工作区: --</span>
-            </div>
-          </div>
-
-          <div class="banner-right">
-            <div class="watermark-badge">
-              <span id="detWatermarkText" style="color: var(--green);">0% 水位</span>
-              <span style="color: var(--muted); font-size: 11px;" id="detLimitText">/ 128k</span>
-            </div>
-            <div class="watermark-progress-wrap">
-              <div class="watermark-progress-bar" id="detProgressBar" style="width: 0%; background: var(--green);"></div>
+              <span>目录: --</span>
             </div>
           </div>
         </div>
 
-        <!-- dsh-context KPI 概览带 -->
+        <div class="modal-head-right">
+          <div class="watermark-gauge-box">
+            <div class="watermark-label-line">
+              <span id="modalWatermarkText" style="color: var(--green); font-weight:600;">0% 水位</span>
+              <span id="modalLimitText" style="color: var(--muted); font-size: 11.5px;">/ 128k</span>
+            </div>
+            <div class="watermark-bar-wrap">
+              <div class="watermark-bar-fill" id="modalWatermarkFill" style="width: 0%; background: var(--green);"></div>
+            </div>
+          </div>
+
+          <button type="button" class="btn-modal-close" id="btnModalClose" title="关闭 (Esc)">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="3" y1="3" x2="13" y2="13"/>
+              <line x1="13" y1="3" x2="3" y2="13"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 弹窗可滚动主体内容 (完整 dsh-context 交互大盘) -->
+      <div class="modal-body">
+        <!-- dsh-context KPI 指标行 -->
         <div class="dsh-kpis">
           <div class="dsh-kpi-item">
             <div class="label">当前上下文规模</div>
@@ -165,73 +178,82 @@
         </div>
 
         <!-- 上下文增长演进面积图 (Context Evolution Chart) -->
-        <div class="chart-header">
-          <div class="chart-title">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="2 12 6 8 10 11 14 4"/>
-            </svg>
-            <span>上下文演进曲线 (Context Evolution Trend)</span>
+        <div class="chart-box">
+          <div class="chart-header">
+            <div class="chart-title">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="2 12 6 8 10 11 14 4"/>
+              </svg>
+              <span>上下文演进曲线 (Context Evolution Trend)</span>
+            </div>
+
+            <!-- 分层图例 (dsh-context 4 层模型) -->
+            <div class="chart-legends">
+              <div class="legend-pill" title="系统身份设定、指引与角色指令">
+                <span class="legend-dot" style="background: #a855f7;"></span>
+                <span>System</span>
+              </div>
+              <div class="legend-pill" title="模型声明挂载的工具 Schema">
+                <span class="legend-dot" style="background: #38bdf8;"></span>
+                <span>Tools</span>
+              </div>
+              <div class="legend-pill" title="用户请求与助手回复历史">
+                <span class="legend-dot" style="background: #10b981;"></span>
+                <span>Chat History</span>
+              </div>
+              <div class="legend-pill" title="工具执行输出、文件内容与终端结果 (上下文膨胀核心源)">
+                <span class="legend-dot" style="background: #f97316;"></span>
+                <span>Tool Results</span>
+              </div>
+            </div>
           </div>
 
-          <!-- 分层色彩图例 (dsh-context 4层模型) -->
-          <div class="chart-legends">
-            <div class="legend-pill" title="系统身份设定、指引与角色">
-              <span class="legend-dot" style="background: var(--c-system);"></span>
-              <span>System</span>
-            </div>
-            <div class="legend-pill" title="声明的工具 Schema">
-              <span class="legend-dot" style="background: var(--c-tools);"></span>
-              <span>Tools</span>
-            </div>
-            <div class="legend-pill" title="用户请求与助手回复历史">
-              <span class="legend-dot" style="background: var(--c-user);"></span>
-              <span>Chat History</span>
-            </div>
-            <div class="legend-pill" title="工具执行输出、文件内容与终端结果 (膨胀核心源)">
-              <span class="legend-dot" style="background: var(--c-toolres);"></span>
-              <span>Tool Results</span>
-            </div>
+          <!-- Canvas 渲染容器与悬浮 Tooltip -->
+          <div class="canvas-wrap" id="canvasWrap">
+            <canvas id="ctxCanvas"></canvas>
+            <div class="canvas-tooltip" id="ctxTooltip"></div>
           </div>
-        </div>
-
-        <!-- Canvas 渲染容器与悬浮 Tooltip -->
-        <div class="canvas-wrap">
-          <canvas id="ctxCanvas"></canvas>
-          <div class="canvas-tooltip" id="ctxTooltip"></div>
         </div>
 
         <!-- 轮次时间轴步进导航条 (Turns Scrubber) -->
-        <div class="turns-bar" id="turnsBar">
-          <!-- 动态生成 Turn 1, Turn 2... 按钮 -->
+        <div class="turns-bar-section">
+          <div class="turns-bar-label">交互轮次轴 (点击快速跳转):</div>
+          <div class="turns-bar" id="turnsBar">
+            <!-- 动态填充 T1, T2... -->
+          </div>
         </div>
 
         <!-- 单轮具体内容透视 (Turn Inspector) -->
-        <div class="inspector-head">
-          <div class="turn-summary-stat">
-            <span id="inspTurnBadge" style="color: var(--accent);">Turn #1</span>
-            <span id="inspTokens">0 Tokens</span>
-            <span id="inspDelta" style="font-size: 11.5px; color: var(--green);">+0</span>
+        <div class="inspector-card">
+          <div class="inspector-head">
+            <div class="turn-summary-stat">
+              <span class="turn-badge" id="inspTurnBadge">Turn #1</span>
+              <span class="token-badge" id="inspTokens">0 Tokens</span>
+              <span class="delta-badge" id="inspDelta">+0</span>
+            </div>
+
+            <!-- 角色筛选器 -->
+            <div class="segs" id="roleSegs" role="tablist">
+              <button type="button" class="opt on" data-role="all" role="tab">全部</button>
+              <button type="button" class="opt" data-role="system" role="tab">System</button>
+              <button type="button" class="opt" data-role="tools" role="tab">Tools</button>
+              <button type="button" class="opt" data-role="user" role="tab">User</button>
+              <button type="button" class="opt" data-role="assistant" role="tab">Assistant</button>
+              <button type="button" class="opt" data-role="tool_result" role="tab">Tool Results</button>
+            </div>
           </div>
 
-          <!-- 角色筛选器 -->
-          <div class="segs" id="roleSegs" role="tablist">
-            <button type="button" class="opt on" data-role="all" role="tab">全部</button>
-            <button type="button" class="opt" data-role="user" role="tab">User</button>
-            <button type="button" class="opt" data-role="assistant" role="tab">Assistant</button>
-            <button type="button" class="opt" data-role="tool" role="tab">Tools</button>
+          <!-- 消息流透视列表 (可展开/折叠、查看具体内容与复制) -->
+          <div class="messages-list" id="messagesList">
+            <!-- 动态渲染消息卡片 -->
           </div>
-        </div>
-
-        <!-- 消息流透视列表 -->
-        <div class="messages-list" id="messagesList">
-          <!-- 动态渲染消息卡片 -->
         </div>
 
         <!-- 诊断与 Top 消耗排行 -->
         <div class="diag-grid">
           <div class="diag-card">
             <div class="diag-title">
-              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="var(--amber)" stroke-width="2">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="var(--amber)" stroke-width="2">
                 <path d="M8 1v14M1 8h14"/>
               </svg>
               <span>Top 上下文消耗源 (Top Token Consumers)</span>
@@ -239,7 +261,7 @@
             <table class="diag-table">
               <thead>
                 <tr>
-                  <th>操作/调用</th>
+                  <th>操作 / 调用</th>
                   <th>轮次</th>
                   <th>Tokens</th>
                   <th>占比</th>
@@ -253,19 +275,19 @@
 
           <div class="diag-card">
             <div class="diag-title">
-              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="var(--green)" stroke-width="2">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="var(--green)" stroke-width="2">
                 <circle cx="8" cy="8" r="6"/><polyline points="5 8 7 10 11 6"/>
               </svg>
               <span>上下文健康诊断 (Context Headroom)</span>
             </div>
-            <div id="healthTips" style="display:flex; flex-direction:column; gap:6px; font-size:11.5px; color:var(--fg-2); line-height:1.6;">
+            <div id="healthTips" class="health-tips">
               <!-- 动态诊断建议 -->
             </div>
           </div>
         </div>
-      </section>
+      </div>
     </div>
-  </main>
+  </div>
 
   <div id="toast" class="toast" hidden></div>
 </body>

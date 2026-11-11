@@ -71,9 +71,10 @@ function getIconSvg(idOrIcon, fallbackIcon) {
   return ICONS.default;
 }
 
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { ICONS, getIconSvg };
-} else {
+if (typeof window !== "undefined") {
   window.ICONS = ICONS;
   window.getIconSvg = getIconSvg;
+}
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { ICONS, getIconSvg };
 }
