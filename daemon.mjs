@@ -1,4 +1,4 @@
-// daemon.mjs - 实时同步与解析 Magpie 上下文透视数据 (支持 Antigravity, DSH, Codex 与实时网关流量)
+// daemon.mjs - 实时同步与解析 Magpie 上下文透视数据 (直读 usage.jsonl 与各 Agent 真实会话)
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -7,11 +7,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.HOME || "";
 
-const APP_LOG_PATH = path.join(HOME, "Library/Logs/magpie/app.log");
 const USAGE_JSONL_PATH = path.join(HOME, ".config/magpie/usage.jsonl");
 const SESSIONS_JSON_PATH = path.join(HOME, ".cache/magpie/sessions.json");
-const CONTEXT_RECORDS_DIR = path.join(HOME, ".cache/magpie/context-records");
-
+const APP_LOG_PATH = path.join(HOME, "Library/Logs/magpie/app.log");
 const CONTEXT_DATA_JS_PATH = path.join(__dirname, "page/context-data.js");
 
 // 常用模型的默认上下文窗口大小 (Tokens)
@@ -42,9 +40,6 @@ function getModelLimit(model) {
   return MODEL_LIMITS.default;
 }
 
-/**
- * 估算文本 Token
- */
 function estimateTokens(text) {
   if (!text) return 0;
   if (typeof text !== "string") text = JSON.stringify(text);
@@ -60,9 +55,6 @@ function estimateTokens(text) {
   return Math.ceil(cjk * 1.25 + ascii * 0.28) || 1;
 }
 
-/**
- * 格式化时间戳
- */
 function formatTime(ts) {
   if (!ts) return "";
   const dt = new Date(ts);
@@ -71,70 +63,70 @@ function formatTime(ts) {
   return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
 }
 
+function timeAgo(dateStr) {
+  if (!dateStr) return "";
+  const dt = new Date(dateStr);
+  const now = new Date();
+  const diffSec = Math.floor((now - dt) / 1000);
+  if (diffSec < 60) return "刚刚";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`;
+  const days = Math.floor(diffSec / 86400);
+  if (days === 1) return "昨天";
+  if (days < 30) return `${days} 天前`;
+  return `${Math.floor(days / 30)} 个月前`;
+}
+
 // 内存中缓存实时拦截的会话转存
 const liveGatewaySessions = new Map();
 
 /**
- * 从 app.log 读取实时拦截的上下文记录
+ * 1. 读取 usage.jsonl 并构建请求索引
  */
-let appLogLastSize = 0;
-try {
-  if (fs.existsSync(APP_LOG_PATH)) {
-    appLogLastSize = fs.statSync(APP_LOG_PATH).size;
-  }
-} catch (e) {}
+function readUsageRequests() {
+  const reqsBySession = new Map();
+  const unlinkedRequests = [];
 
-function checkAppLogRecords() {
+  if (!fs.existsSync(USAGE_JSONL_PATH)) return { reqsBySession, unlinkedRequests };
+
   try {
-    if (!fs.existsSync(APP_LOG_PATH)) return false;
-    const stat = fs.statSync(APP_LOG_PATH);
-    if (stat.size <= appLogLastSize) {
-      if (stat.size < appLogLastSize) appLogLastSize = stat.size;
-      return false;
+    const content = fs.readFileSync(USAGE_JSONL_PATH, "utf8");
+    const lines = content.split("\n");
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      try {
+        const row = JSON.parse(line);
+        const sid = row.session || row.native_session;
+        if (sid) {
+          if (!reqsBySession.has(sid)) reqsBySession.set(sid, []);
+          reqsBySession.get(sid).push(row);
+        } else {
+          unlinkedRequests.push(row);
+        }
+      } catch (e) {}
     }
-
-    const diff = stat.size - appLogLastSize;
-    const fd = fs.openSync(APP_LOG_PATH, "r");
-    const buf = Buffer.alloc(diff);
-    fs.readSync(fd, buf, 0, diff, appLogLastSize);
-    fs.closeSync(fd);
-    appLogLastSize = stat.size;
-
-    const lines = buf.toString("utf8").split("\n");
-    let changed = false;
-
-    for (const line of lines) {
-      const tag = "[CONTEXT_RECORD]:";
-      const idx = line.indexOf(tag);
-      if (idx !== -1) {
-        try {
-          const item = JSON.parse(line.slice(idx + tag.length).trim());
-          const sid = item.sessionId || "default";
-          if (!liveGatewaySessions.has(sid)) {
-            liveGatewaySessions.set(sid, []);
-          }
-          liveGatewaySessions.get(sid).push(item);
-          changed = true;
-        } catch (e) {}
-      }
-    }
-    return changed;
   } catch (e) {
-    return false;
+    console.error("[Daemon] Error reading usage.jsonl:", e.message);
   }
+
+  return { reqsBySession, unlinkedRequests };
 }
 
 /**
- * 解析 Antigravity 会话详情与轮次
+ * 2. 解析 Antigravity 真实会话
  */
-function parseAntigravitySession(sessionId, cwd, title, start, last, meta) {
+function parseAntigravitySession(sessionId, cwd, title, start, last, meta, usageReqs = []) {
   const transcriptPath = path.join(HOME, `.gemini/antigravity/brain/${sessionId}/.system_generated/logs/transcript.jsonl`);
   const turns = [];
-  let model = meta?.models?.[0]?.model || "gemini-3.8-flash";
+  let model = meta?.models?.[0]?.model || usageReqs[0]?.model || "gemini-3.8-flash";
   let totalInputTokens = meta?.input || 0;
   let totalOutputTokens = meta?.output || 0;
   let totalCacheRead = meta?.cache_read || 0;
+  let cost = meta?.cost || 0;
 
+  // 1. 如果有物理 transcript.jsonl，解析出精确的消息内容与轮次
   if (fs.existsSync(transcriptPath)) {
     try {
       const raw = fs.readFileSync(transcriptPath, "utf8");
@@ -153,8 +145,8 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta) {
             turnIdx++;
             const uText = step.content || "";
             const uTokens = estimateTokens(uText);
-            const sysTokens = 4500; // Antigravity 预估系统提示词基数
-            const toolsTokens = 3200; // 预置工具定义基数
+            const sysTokens = 4500;
+            const toolsTokens = 3200;
 
             cumTokens += uTokens;
             curTurn = {
@@ -204,7 +196,6 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta) {
               fullText: respText.length > 4000 ? respText.slice(0, 4000) + "\n... [超长文本已截断显示]" : respText
             });
 
-            // 检查是否有大体量输出导致的膨胀
             if (curTurn.totalTokens - lastTokens > 15000) {
               curTurn.isBloat = true;
             }
@@ -214,12 +205,52 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta) {
     } catch (e) {}
   }
 
-  // 若无转储文件，根据元数据生成合成演进点
+  // 2. 如果关联到了 usage.jsonl 请求，使用真实网关 tokens 校验并补充
+  if (usageReqs.length > 0) {
+    if (turns.length === 0) {
+      let lastIn = 0;
+      usageReqs.forEach((r, idx) => {
+        const inTok = r.in || 0;
+        const outTok = r.out || 0;
+        const isComp = lastIn > 8000 && inTok < lastIn * 0.78;
+        const delta = lastIn > 0 ? inTok - lastIn : inTok;
+
+        turns.push({
+          turnIdx: idx + 1,
+          time: new Date(r.t).getTime(),
+          timestamp: formatTime(r.t),
+          userText: `网关调用 #${r.route_id || idx + 1}`,
+          totalTokens: inTok,
+          tokenDelta: delta,
+          breakdown: {
+            systemTokens: Math.min(inTok, 4500),
+            toolsTokens: Math.min(Math.max(0, inTok - 4500), 3200),
+            userTokens: Math.round(inTok * 0.15),
+            assistantTokens: outTok,
+            toolResultTokens: Math.max(0, inTok - 7700 - Math.round(inTok * 0.15))
+          },
+          isCompaction: isComp,
+          isBloat: delta > 15000,
+          cacheRead: r.cache_read || 0,
+          messages: [
+            {
+              idx: 0,
+              role: "user",
+              tokens: inTok,
+              chars: inTok * 3,
+              snippet: `网关请求 Route #${r.route_id || idx + 1} (${r.model})`,
+              fullText: `[网关请求 #${r.route_id}] 耗时: ${r.ms || 0}ms, 状态码: ${r.status || 200}`
+            }
+          ]
+        });
+        lastIn = inTok;
+      });
+    }
+  }
+
+  // 兜底轮次
   if (turns.length === 0) {
     const input = meta?.input || 12000;
-    const sys = 5000;
-    const tools = 3500;
-    const hist = Math.max(0, input - sys - tools);
     turns.push({
       turnIdx: 1,
       time: start ? new Date(start).getTime() : Date.now(),
@@ -227,24 +258,15 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta) {
       userText: title || "会话启动",
       totalTokens: input,
       breakdown: {
-        systemTokens: sys,
-        toolsTokens: tools,
-        userTokens: Math.round(hist * 0.3),
+        systemTokens: 4500,
+        toolsTokens: 3200,
+        userTokens: Math.round(input * 0.2),
         assistantTokens: meta?.output || 500,
-        toolResultTokens: Math.round(hist * 0.7)
+        toolResultTokens: Math.max(0, input - 7700 - Math.round(input * 0.2))
       },
       isCompaction: false,
       isBloat: false,
-      messages: [
-        {
-          idx: 0,
-          role: "user",
-          tokens: Math.round(hist * 0.3),
-          chars: Math.round(hist * 1.2),
-          snippet: title || "用户对话",
-          fullText: title || "用户对话"
-        }
-      ]
+      messages: [{ idx: 0, role: "user", tokens: input, chars: input * 3, snippet: title, fullText: title }]
     });
   }
 
@@ -259,17 +281,18 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta) {
     agentName: "Antigravity",
     agentIcon: "antigravity.svg",
     cwd: cwd || "",
-    model: model,
+    model,
     modelLimit: limit,
     watermarkPercent: Math.min(100, Math.round((currentTokens / limit) * 100)),
     peakTokens,
     currentTokens,
-    totalInputTokens,
+    totalInputTokens: totalInputTokens || peakTokens,
     totalOutputTokens,
     totalCacheRead,
-    cost: meta?.cost || 0,
+    cost: cost || 0,
     startTime: formatTime(start),
     lastTime: formatTime(last),
+    timeAgo: timeAgo(last),
     turnsCount: turns.length,
     compactionCount: turns.filter(t => t.isCompaction).length,
     bloatCount: turns.filter(t => t.isBloat).length,
@@ -278,23 +301,23 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta) {
 }
 
 /**
- * 解析 DSH (DeepSeek Harness) 会话文件
+ * 3. 解析 DSH 真实会话
  */
-function parseDshSession(filePath, meta) {
+function parseDshSession(filePath, meta, usageReqs = []) {
   const sid = meta?.id || path.basename(path.dirname(filePath));
   const cwd = meta?.cwd || "";
   const title = meta?.title || "DSH 会话";
   const start = meta?.start;
   const last = meta?.last;
-  let model = meta?.models?.[0]?.model || meta?.model || "workbuddy/kimi-k3.1-pro";
+  let model = meta?.models?.[0]?.model || meta?.model || usageReqs[0]?.model || "workbuddy/kimi-k3.1-pro";
 
   const turns = [];
   let compactionCount = 0;
   let bloatCount = 0;
 
-  try {
-    if (fs.existsSync(filePath)) {
-      // 通过 zstd 快速解压并按行提取核心事件
+  // 1. 如果有物理 zstd 会话，快速解压提取核心事件
+  if (fs.existsSync(filePath)) {
+    try {
       const cmd = `zstd -dc "${filePath}" 2>/dev/null | grep -E '"(turn/start|user/message|assistant/message|tool/call|tool/result|request/context|step/end)"' | head -n 300`;
       const out = execSync(cmd, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
       const lines = out.split("\n").filter(Boolean);
@@ -303,8 +326,8 @@ function parseDshSession(filePath, meta) {
       let turnIdx = 0;
       let cumTokens = 0;
       let lastTotal = 0;
-      const sysTokens = 3800; // DSH OSWYN 系统提示词基数
-      const toolsTokens = 2900; // DSH 内置 tools 定义基数
+      const sysTokens = 3800;
+      const toolsTokens = 2900;
 
       for (const line of lines) {
         try {
@@ -332,6 +355,7 @@ function parseDshSession(filePath, meta) {
               timestamp: formatTime(ev.time),
               userText: str.slice(0, 160),
               totalTokens: total,
+              tokenDelta: lastTotal > 0 ? total - lastTotal : total,
               breakdown: {
                 systemTokens: sysTokens,
                 toolsTokens: toolsTokens,
@@ -407,8 +431,48 @@ function parseDshSession(filePath, meta) {
           }
         } catch (e) {}
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
+
+  // 2. 如果缺少物理轮次但有 usage.jsonl 请求，使用 usage.jsonl 构建演进曲线
+  if (turns.length === 0 && usageReqs.length > 0) {
+    let lastIn = 0;
+    usageReqs.forEach((r, idx) => {
+      const inTok = r.in || 0;
+      const isComp = lastIn > 8000 && inTok < lastIn * 0.75;
+      if (isComp) compactionCount++;
+      const delta = lastIn > 0 ? inTok - lastIn : inTok;
+
+      turns.push({
+        turnIdx: idx + 1,
+        time: new Date(r.t).getTime(),
+        timestamp: formatTime(r.t),
+        userText: `DSH 交互轮次 #${idx + 1}`,
+        totalTokens: inTok,
+        tokenDelta: delta,
+        breakdown: {
+          systemTokens: 3800,
+          toolsTokens: 2900,
+          userTokens: Math.round(inTok * 0.15),
+          assistantTokens: r.out || 100,
+          toolResultTokens: Math.max(0, inTok - 6700 - Math.round(inTok * 0.15))
+        },
+        isCompaction: isComp,
+        isBloat: delta > 18000,
+        messages: [
+          {
+            idx: 0,
+            role: "user",
+            tokens: inTok,
+            chars: inTok * 3,
+            snippet: `DSH 调用 (${r.model}) · ${inTok} tokens`,
+            fullText: `[DSH 交互] Route #${r.route_id}, 状态: ${r.status || 200}`
+          }
+        ]
+      });
+      lastIn = inTok;
+    });
+  }
 
   // 兜底合成
   if (turns.length === 0) {
@@ -419,6 +483,7 @@ function parseDshSession(filePath, meta) {
       timestamp: formatTime(start),
       userText: title,
       totalTokens: totalEst,
+      tokenDelta: totalEst,
       breakdown: {
         systemTokens: 3800,
         toolsTokens: 2900,
@@ -428,16 +493,7 @@ function parseDshSession(filePath, meta) {
       },
       isCompaction: false,
       isBloat: false,
-      messages: [
-        {
-          idx: 0,
-          role: "user",
-          tokens: 800,
-          chars: 1200,
-          snippet: title,
-          fullText: title
-        }
-      ]
+      messages: [{ idx: 0, role: "user", tokens: 800, chars: 1200, snippet: title, fullText: title }]
     });
   }
 
@@ -463,6 +519,7 @@ function parseDshSession(filePath, meta) {
     cost: meta?.cost || 0,
     startTime: formatTime(start),
     lastTime: formatTime(last),
+    timeAgo: timeAgo(last),
     turnsCount: turns.length,
     compactionCount,
     bloatCount,
@@ -471,116 +528,15 @@ function parseDshSession(filePath, meta) {
 }
 
 /**
- * 解析 Codex 会话文件
- */
-function parseCodexSession(filePath, meta) {
-  const sid = meta?.id || path.basename(filePath, ".jsonl");
-  const cwd = meta?.cwd || "";
-  const title = meta?.title || "Codex 会话";
-  const start = meta?.start;
-  const last = meta?.last;
-  const model = meta?.models?.[0]?.model || meta?.model || "gpt-5.5";
-
-  const turns = [];
-  try {
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const lines = raw.split("\n").filter(Boolean);
-      let turnIdx = 0;
-      let cumTokens = 0;
-
-      for (const line of lines.slice(0, 100)) {
-        try {
-          const item = JSON.parse(line);
-          if (item.role === "user" || item.type === "user") {
-            turnIdx++;
-            const txt = item.content || item.text || "";
-            const str = typeof txt === "string" ? txt : JSON.stringify(txt);
-            const uTokens = estimateTokens(str);
-            cumTokens += uTokens;
-
-            turns.push({
-              turnIdx,
-              time: item.timestamp || Date.now(),
-              timestamp: formatTime(item.timestamp),
-              userText: str.slice(0, 160),
-              totalTokens: 6000 + cumTokens,
-              breakdown: {
-                systemTokens: 3500,
-                toolsTokens: 2500,
-                userTokens: uTokens,
-                assistantTokens: 0,
-                toolResultTokens: Math.max(0, cumTokens - uTokens)
-              },
-              isCompaction: false,
-              isBloat: false,
-              messages: [
-                {
-                  idx: 0,
-                  role: "user",
-                  tokens: uTokens,
-                  chars: str.length,
-                  snippet: str.slice(0, 200),
-                  fullText: str.length > 4000 ? str.slice(0, 4000) + "\n... [超长文本已截断显示]" : str
-                }
-              ]
-            });
-          }
-        } catch (e) {}
-      }
-    }
-  } catch (e) {}
-
-  if (turns.length === 0) {
-    turns.push({
-      turnIdx: 1,
-      time: start ? new Date(start).getTime() : Date.now(),
-      timestamp: formatTime(start),
-      userText: title,
-      totalTokens: 14500,
-      breakdown: { systemTokens: 3500, toolsTokens: 2500, userTokens: 1500, assistantTokens: 2000, toolResultTokens: 5000 },
-      isCompaction: false,
-      isBloat: false,
-      messages: [{ idx: 0, role: "user", tokens: 1500, chars: 2000, snippet: title, fullText: title }]
-    });
-  }
-
-  const peakTokens = Math.max(...turns.map(t => t.totalTokens));
-  const currentTokens = turns[turns.length - 1]?.totalTokens || peakTokens;
-  const limit = getModelLimit(model);
-
-  return {
-    id: sid,
-    name: title || `Codex 会话 ${sid.slice(0, 8)}`,
-    agent: "codex",
-    agentName: "Codex",
-    agentIcon: "codex.svg",
-    cwd,
-    model,
-    modelLimit: limit,
-    watermarkPercent: Math.min(100, Math.round((currentTokens / limit) * 100)),
-    peakTokens,
-    currentTokens,
-    totalInputTokens: peakTokens,
-    totalOutputTokens: 1500,
-    totalCacheRead: 0,
-    cost: meta?.cost || 0,
-    startTime: formatTime(start),
-    lastTime: formatTime(last),
-    turnsCount: turns.length,
-    compactionCount: 0,
-    bloatCount: 0,
-    turns
-  };
-}
-
-/**
- * 整合所有会话并构建全局视图
+ * 4. 构建全量会话大盘数据
  */
 export function buildContextDataset() {
   const sessions = [];
 
-  // 1. 读取 Magpie 官方维护的 sessions.json 索引
+  // 读取 usage.jsonl
+  const { reqsBySession, unlinkedRequests } = readUsageRequests();
+
+  // 读取 sessions.json 索引
   if (fs.existsSync(SESSIONS_JSON_PATH)) {
     try {
       const raw = fs.readFileSync(SESSIONS_JSON_PATH, "utf8");
@@ -589,15 +545,16 @@ export function buildContextDataset() {
 
       for (const [fpath, meta] of Object.entries(files)) {
         const agent = meta.agent;
+        const sid = meta.id;
+        const matchedUsage = reqsBySession.get(sid) || [];
+
         if (agent === "antigravity") {
-          sessions.push(parseAntigravitySession(meta.id, meta.cwd, meta.title, meta.start, meta.last, meta));
+          sessions.push(parseAntigravitySession(meta.id, meta.cwd, meta.title, meta.start, meta.last, meta, matchedUsage));
         } else if (agent === "dsh") {
-          // 仅采样最近 20 个活跃的 DSH 会话，防止数据集过大卡顿
-          if (sessions.filter(s => s.agent === "dsh").length < 20) {
-            sessions.push(parseDshSession(fpath, meta));
+          // 采样最近 35 个活跃的 DSH 会话
+          if (sessions.filter(s => s.agent === "dsh").length < 35) {
+            sessions.push(parseDshSession(fpath, meta, matchedUsage));
           }
-        } else if (agent === "codex") {
-          sessions.push(parseCodexSession(fpath, meta));
         }
       }
     } catch (e) {
@@ -605,115 +562,167 @@ export function buildContextDataset() {
     }
   }
 
-  // 2. 合并通过 Gateway 中间件拦截到的实时活跃会话
-  for (const [sid, records] of liveGatewaySessions.entries()) {
-    if (!records || records.length === 0) continue;
-    const latest = records[records.length - 1];
-    const client = latest.client || "default";
-    const model = latest.model || "unknown";
-    const limit = getModelLimit(model);
+  // 聚类 usage.jsonl 中未关联的活跃对话
+  if (unlinkedRequests.length > 0) {
+    const clusters = [];
+    let currentCluster = null;
+    let lastTime = 0;
 
-    const turns = records.map((r, idx) => ({
-      turnIdx: idx + 1,
-      time: r.time,
-      timestamp: r.timestamp,
-      userText: r.messages?.find(m => m.role === "user")?.snippet || "用户请求",
-      totalTokens: r.totalTokens,
-      breakdown: r.breakdown,
-      isCompaction: !!r.isCompaction,
-      isBloat: r.tokenDelta > 18000,
-      messages: r.messages || []
-    }));
+    // 按时间顺序聚类
+    for (const r of unlinkedRequests) {
+      const t = new Date(r.t).getTime();
+      const ag = r.agent || "default";
+      const md = r.model || "unknown";
 
-    const peakTokens = Math.max(...turns.map(t => t.totalTokens));
-    const currentTokens = turns[turns.length - 1]?.totalTokens || peakTokens;
-
-    // 检查是否已有同 ID 会话，有则合并升级
-    const existingIdx = sessions.findIndex(s => s.id === sid);
-    const item = {
-      id: sid,
-      name: `[实时] ${client.toUpperCase()} 会话 (${latest.timestamp})`,
-      agent: client,
-      agentName: client === "antigravity" ? "Antigravity" : (client === "dsh" ? "DeepSeek Harness" : client),
-      agentIcon: `${client}.svg`,
-      cwd: "",
-      model,
-      modelLimit: limit,
-      watermarkPercent: Math.min(100, Math.round((currentTokens / limit) * 100)),
-      peakTokens,
-      currentTokens,
-      totalInputTokens: currentTokens,
-      totalOutputTokens: 2000,
-      totalCacheRead: 0,
-      cost: 0,
-      startTime: records[0].timestamp,
-      lastTime: latest.timestamp,
-      turnsCount: turns.length,
-      compactionCount: turns.filter(t => t.isCompaction).length,
-      bloatCount: turns.filter(t => t.isBloat).length,
-      turns
-    };
-
-    if (existingIdx !== -1) {
-      sessions[existingIdx] = item;
-    } else {
-      sessions.unshift(item);
+      if (currentCluster && currentCluster.agent === ag && currentCluster.model === md && (t - lastTime < 1800000)) {
+        currentCluster.requests.push(r);
+        lastTime = t;
+      } else {
+        if (currentCluster && currentCluster.requests.length >= 3) {
+          clusters.push(currentCluster);
+        }
+        currentCluster = {
+          agent: ag,
+          model: md,
+          start: r.t,
+          requests: [r]
+        };
+        lastTime = t;
+      }
     }
+    if (currentCluster && currentCluster.requests.length >= 3) {
+      clusters.push(currentCluster);
+    }
+
+    // 转化为会话对象
+    clusters.slice(-15).forEach((c, idx) => {
+      const first = c.requests[0];
+      const last = c.requests[c.requests.length - 1];
+      const sid = `usage-cluster-${idx}-${Date.now()}`;
+      let lastIn = 0;
+      let compactionCount = 0;
+      let bloatCount = 0;
+
+      const turns = c.requests.map((r, tIdx) => {
+        const inTok = r.in || 0;
+        const isComp = lastIn > 8000 && inTok < lastIn * 0.75;
+        if (isComp) compactionCount++;
+        const delta = lastIn > 0 ? inTok - lastIn : inTok;
+        if (delta > 18000) bloatCount++;
+
+        const turn = {
+          turnIdx: tIdx + 1,
+          time: new Date(r.t).getTime(),
+          timestamp: formatTime(r.t),
+          userText: `网关调用 #${r.route_id || tIdx + 1}`,
+          totalTokens: inTok,
+          tokenDelta: delta,
+          breakdown: {
+            systemTokens: Math.min(inTok, 3500),
+            toolsTokens: Math.min(Math.max(0, inTok - 3500), 2500),
+            userTokens: Math.round(inTok * 0.15),
+            assistantTokens: r.out || 120,
+            toolResultTokens: Math.max(0, inTok - 6000 - Math.round(inTok * 0.15))
+          },
+          isCompaction: isComp,
+          isBloat: delta > 18000,
+          cacheRead: r.cache_read || 0,
+          messages: [
+            {
+              idx: 0,
+              role: "user",
+              tokens: inTok,
+              chars: inTok * 3,
+              snippet: `网关调用 #${r.route_id || tIdx + 1} (${r.model})`,
+              fullText: `[网关调用] 状态: ${r.status || 200}, 耗时: ${r.ms || 0}ms, 出字: ${r.out || 0} tokens`
+            }
+          ]
+        };
+        lastIn = inTok;
+        return turn;
+      });
+
+      const peakTokens = Math.max(...turns.map(t => t.totalTokens), 1000);
+      const currentTokens = turns[turns.length - 1]?.totalTokens || peakTokens;
+      const limit = getModelLimit(c.model);
+
+      sessions.push({
+        id: sid,
+        name: `${c.agent.toUpperCase()} 网关交互 (${formatTime(c.start).slice(5, 16)})`,
+        agent: c.agent,
+        agentName: c.agent === "dsh" ? "DeepSeek Harness" : (c.agent === "antigravity" ? "Antigravity" : c.agent),
+        agentIcon: `${c.agent}.svg`,
+        cwd: "",
+        model: c.model,
+        modelLimit: limit,
+        watermarkPercent: Math.min(100, Math.round((currentTokens / limit) * 100)),
+        peakTokens,
+        currentTokens,
+        totalInputTokens: currentTokens,
+        totalOutputTokens: c.requests.reduce((a, b) => a + (b.out || 0), 0),
+        totalCacheRead: c.requests.reduce((a, b) => a + (b.cache_read || 0), 0),
+        cost: 0,
+        startTime: formatTime(c.start),
+        lastTime: formatTime(last.t),
+        timeAgo: timeAgo(last.t),
+        turnsCount: turns.length,
+        compactionCount,
+        bloatCount,
+        turns
+      });
+    });
   }
 
-  // 按最后更新时间降序排列
+  // 排序
   sessions.sort((a, b) => {
     const ta = new Date(a.lastTime || 0).getTime();
     const tb = new Date(b.lastTime || 0).getTime();
     return tb - ta;
   });
 
-  // 全局汇总统计 (KPI Summary)
+  // 汇总各 Agent 会话数量
+  const agentsSummary = {
+    all: sessions.length,
+    antigravity: sessions.filter(s => s.agent === "antigravity").length,
+    dsh: sessions.filter(s => s.agent === "dsh").length,
+    codex: sessions.filter(s => s.agent === "codex").length,
+    other: sessions.filter(s => !["antigravity", "dsh", "codex"].includes(s.agent)).length
+  };
+
   const totalSessions = sessions.length;
   const totalTurns = sessions.reduce((acc, s) => acc + s.turnsCount, 0);
   const totalCompactions = sessions.reduce((acc, s) => acc + s.compactionCount, 0);
   const maxWatermark = Math.max(...sessions.map(s => s.watermarkPercent), 0);
-  const totalCost = sessions.reduce((acc, s) => acc + (s.cost || 0), 0);
+  const totalCacheRead = sessions.reduce((acc, s) => acc + (s.totalCacheRead || 0), 0);
 
   const summary = {
     totalSessions,
     totalTurns,
     totalCompactions,
     maxWatermark,
-    totalCost: totalCost.toFixed(4),
+    totalCacheRead,
+    agents: agentsSummary,
     updatedAt: formatTime(Date.now())
   };
 
   return { sessions, summary };
 }
 
-/**
- * 将数据写入静态 context-data.js 供插件页面直读
- */
 export function syncContextData() {
   try {
     const { sessions, summary } = buildContextDataset();
-    const jsContent = `// context-data.js - 自动生成的上下文监控数据 (最新 ${sessions.length} 个会话)\nwindow.CONTEXT_SUMMARY = ${JSON.stringify(summary, null, 2)};\nwindow.CONTEXT_SESSIONS = ${JSON.stringify(sessions, null, 2)};\n`;
+    const jsContent = `// context-data.js - 自动从 usage.jsonl 与真实会话构建\nwindow.CONTEXT_SUMMARY = ${JSON.stringify(summary, null, 2)};\nwindow.CONTEXT_SESSIONS = ${JSON.stringify(sessions, null, 2)};\n`;
     fs.writeFileSync(CONTEXT_DATA_JS_PATH, jsContent, "utf8");
-    console.log(`[Daemon] Updated context-data.js with ${sessions.length} sessions, ${summary.totalTurns} turns.`);
+    console.log(`[Daemon] Synced context-data.js: ${sessions.length} sessions, ${summary.totalTurns} turns (Agents: Antigravity=${summary.agents.antigravity}, DSH=${summary.agents.dsh}, Other=${summary.agents.other})`);
   } catch (e) {
     console.error("[Daemon] Error writing context-data.js:", e.message);
   }
 }
 
 console.log("[Daemon] Magpie Context Lens Daemon Starting...");
-checkAppLogRecords();
 syncContextData();
 
-// 每 2 秒检查一次实时日志与网关调用
-setInterval(() => {
-  const updated = checkAppLogRecords();
-  if (updated) {
-    syncContextData();
-  }
-}, 2000);
-
-// 每 30 秒全量刷新一次本地历史会话
+// 每 3 秒检查一次 usage.jsonl 增量
 setInterval(() => {
   syncContextData();
-}, 30_000);
+}, 3000);

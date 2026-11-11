@@ -1,47 +1,60 @@
-// app.js - 上下文透视 (Context Lens) 前端交互与图表引擎
+// app.js - 上下文透视 (Context Lens) 官方样式与响应式布局交互逻辑
 
 (() => {
   const $ = (id) => document.getElementById(id);
 
   // 1. 状态定义
-  let sessions = Array.isArray(window.CONTEXT_SESSIONS) ? [...window.CONTEXT_SESSIONS] : [];
+  let rawSessions = Array.isArray(window.CONTEXT_SESSIONS) ? [...window.CONTEXT_SESSIONS] : [];
   let summary = window.CONTEXT_SUMMARY || {};
+  let activeAgentFilter = "all";
   let activeSessionId = null;
   let activeTurnIdx = 1;
-  let agentFilter = "all";
-  let roleFilter = "all";
+  let activeRoleFilter = "all";
   let searchQuery = "";
 
   // 2. DOM 节点引用
-  const elSessionsList = $("sessions-list");
-  const elSessionSearch = $("session-search-input");
-  const elAgentFilters = $("agent-filter-pills");
-  const elRoleFilters = $("role-filter-pills");
-  const elCanvas = $("evolutionChart");
-  const elTooltip = $("chart-tooltip");
-  const elTurnsSelector = $("turns-selector");
-  const elMessagesStream = $("messages-stream");
-  const elTopConsumers = $("top-consumers-tbody");
-  const elHealthTips = $("health-tips-container");
+  const elMainLayout = $("mainLayout");
+  const elAgentSegs = $("agentSegs");
+  const elRoleSegs = $("roleSegs");
+  const elSessList = $("sessList");
+  const elSessQ = $("sessQ");
+  const elBtnBackToList = $("btnBackToList");
+  const elBtnRefresh = $("btnRefresh");
+  const elBtnTheme = $("btnTheme");
   const elToast = $("toast");
 
-  // KPI 节点
-  const elKpiWatermark = $("kpi-watermark");
-  const elKpiWatermarkBar = $("kpi-watermark-bar");
-  const elKpiWatermarkSub = $("kpi-watermark-sub");
-  const elKpiPeakTokens = $("kpi-peak-tokens");
-  const elKpiPeakSub = $("kpi-peak-sub");
-  const elKpiTurnsCount = $("kpi-turns-count");
-  const elKpiTurnsSub = $("kpi-turns-sub");
-  const elKpiCompactions = $("kpi-compactions");
-  const elKpiCompactionsSub = $("kpi-compactions-sub");
-  const elKpiSessionsTotal = $("kpi-sessions-total");
+  // 全局 KPI 节点
+  const elKpiTotalSess = $("kpiTotalSess");
+  const elKpiPeakWatermark = $("kpiPeakWatermark");
+  const elKpiPeakWatermarkSub = $("kpiPeakWatermarkSub");
+  const elKpiTotalTurns = $("kpiTotalTurns");
+  const elKpiTotalCompactions = $("kpiTotalCompactions");
+  const elKpiCacheRead = $("kpiCacheRead");
+
+  // Detail 节点
+  const elDetTitle = $("detTitle");
+  const elDetSub = $("detSub");
+  const elDetWatermarkText = $("detWatermarkText");
+  const elDetLimitText = $("detLimitText");
+  const elDetProgressBar = $("detProgressBar");
+  const elDetCurTokens = $("detCurTokens");
+  const elDetPeakTokens = $("detPeakTokens");
+  const elDetTurnsCount = $("detTurnsCount");
+  const elDetCompCount = $("detCompCount");
+  const elDetCacheRead = $("detCacheRead");
+
+  // Chart 节点
+  const elCanvas = $("ctxCanvas");
+  const elTooltip = $("ctxTooltip");
+  const elTurnsBar = $("turnsBar");
 
   // Inspector 节点
-  const elInspectTurnIdx = $("inspect-turn-idx");
-  const elInspectTurnTokens = $("inspect-turn-tokens");
-  const elInspectTurnDelta = $("inspect-turn-delta");
-  const elInspectTurnPercent = $("inspect-turn-percent");
+  const elInspTurnBadge = $("inspTurnBadge");
+  const elInspTokens = $("inspTokens");
+  const elInspDelta = $("inspDelta");
+  const elMessagesList = $("messagesList");
+  const elTopConsumersBody = $("topConsumersBody");
+  const elHealthTips = $("healthTips");
 
   function showToast(msg) {
     if (!elToast) return;
@@ -49,7 +62,7 @@
     elToast.hidden = false;
     setTimeout(() => {
       elToast.hidden = true;
-    }, 2400);
+    }, 2200);
   }
 
   function formatNumber(n) {
@@ -57,144 +70,176 @@
     return Number(n).toLocaleString("en-US");
   }
 
+  function baseName(p) {
+    if (!p) return "";
+    const segs = p.replace(/\/+$/, "").split("/");
+    return segs[segs.length - 1] || p;
+  }
+
   function getActiveSession() {
-    if (!sessions.length) return null;
-    return sessions.find(s => s.id === activeSessionId) || sessions[0];
+    if (!rawSessions.length) return null;
+    return rawSessions.find(s => s.id === activeSessionId) || rawSessions[0];
   }
 
-  // 3. 渲染全局 KPI
-  function renderGlobalKpi() {
-    const s = getActiveSession();
-    if (!s) return;
-
-    // 当前选定会话的水位
-    const wm = s.watermarkPercent || 0;
-    elKpiWatermark.textContent = `${wm}%`;
-    elKpiWatermarkBar.style.width = `${Math.min(100, wm)}%`;
-
-    if (wm > 80) {
-      elKpiWatermarkBar.style.background = "var(--red)";
-      elKpiWatermark.style.color = "var(--red)";
-    } else if (wm > 60) {
-      elKpiWatermarkBar.style.background = "var(--amber)";
-      elKpiWatermark.style.color = "var(--amber)";
-    } else {
-      elKpiWatermarkBar.style.background = "var(--green)";
-      elKpiWatermark.style.color = "var(--fg)";
+  function getAgentIconSvg(agentKey) {
+    if (typeof window.getIconSvg === "function") {
+      return window.getIconSvg(agentKey);
     }
-
-    elKpiWatermarkSub.textContent = `${formatNumber(s.currentTokens)} / ${formatNumber(s.modelLimit)} Tokens`;
-
-    // 峰值与轮次
-    elKpiPeakTokens.textContent = formatNumber(s.peakTokens);
-    elKpiPeakSub.textContent = `峰值水位 ${(s.peakTokens && s.modelLimit ? Math.round((s.peakTokens / s.modelLimit) * 100) : 0)}%`;
-
-    elKpiTurnsCount.textContent = `${s.turnsCount} 轮`;
-    const totalMsgs = (s.turns || []).reduce((acc, t) => acc + (t.messages?.length || 0), 0);
-    elKpiTurnsSub.textContent = `${totalMsgs} 条上下文消息`;
-
-    elKpiCompactions.textContent = `${s.compactionCount || 0} 次`;
-    elKpiCompactionsSub.textContent = s.compactionCount > 0 ? "已执行历史压缩 ✂" : "未触发压缩事件";
-
-    elKpiSessionsTotal.textContent = String(summary.totalSessions || sessions.length);
+    return `<svg viewBox="0 0 24 24" width="22" height="22" fill="#888"><circle cx="12" cy="12" r="8"/></svg>`;
   }
 
-  // 4. 渲染会话侧边栏列表
-  function renderSessionsList() {
-    elSessionsList.innerHTML = "";
+  // 3. 渲染全局 KPI 与 Agent Tab 徽标数
+  function renderGlobalKpi() {
+    const ags = summary.agents || {};
+    $("badge-all").textContent = String(rawSessions.length);
+    $("badge-antigravity").textContent = String(ags.antigravity || rawSessions.filter(s => s.agent === "antigravity").length);
+    $("badge-dsh").textContent = String(ags.dsh || rawSessions.filter(s => s.agent === "dsh").length);
+    $("badge-codex").textContent = String(ags.codex || rawSessions.filter(s => s.agent === "codex").length);
+    $("badge-other").textContent = String(ags.other || rawSessions.filter(s => !["antigravity", "dsh", "codex"].includes(s.agent)).length);
 
-    const filtered = sessions.filter(s => {
-      // 客户端筛选
-      if (agentFilter === "antigravity" && s.agent !== "antigravity") return false;
-      if (agentFilter === "dsh" && s.agent !== "dsh") return false;
-      if (agentFilter === "codex" && s.agent !== "codex") return false;
-      if (agentFilter === "live" && !s.id.startsWith("sess-") && !s.name.includes("[实时]")) return false;
+    elKpiTotalSess.textContent = String(rawSessions.length);
+    const maxWm = Math.max(...rawSessions.map(s => s.watermarkPercent || 0), 0);
+    elKpiPeakWatermark.textContent = `${maxWm}%`;
+    elKpiPeakWatermark.style.color = maxWm > 75 ? "var(--red)" : (maxWm > 50 ? "var(--amber)" : "var(--green)");
+
+    elKpiTotalTurns.textContent = formatNumber(rawSessions.reduce((a, b) => a + (b.turnsCount || 0), 0));
+    elKpiTotalCompactions.textContent = String(rawSessions.reduce((a, b) => a + (b.compactionCount || 0), 0));
+    elKpiCacheRead.textContent = formatNumber(rawSessions.reduce((a, b) => a + (b.totalCacheRead || 0), 0));
+  }
+
+  // 4. 渲染会话列表 (严格对标官方 .row.sess)
+  function renderSessionsList() {
+    elSessList.innerHTML = "";
+
+    const filtered = rawSessions.filter(s => {
+      // Agent 分段筛选
+      if (activeAgentFilter === "antigravity" && s.agent !== "antigravity") return false;
+      if (activeAgentFilter === "dsh" && s.agent !== "dsh") return false;
+      if (activeAgentFilter === "codex" && s.agent !== "codex") return false;
+      if (activeAgentFilter === "other" && ["antigravity", "dsh", "codex"].includes(s.agent)) return false;
 
       // 关键词搜索
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
-        const matchTitle = (s.name || "").toLowerCase().includes(q);
-        const matchCwd = (s.cwd || "").toLowerCase().includes(q);
-        const matchModel = (s.model || "").toLowerCase().includes(q);
-        if (!matchTitle && !matchCwd && !matchModel) return false;
+        const mTitle = (s.name || "").toLowerCase().includes(q);
+        const mCwd = (s.cwd || "").toLowerCase().includes(q);
+        const mModel = (s.model || "").toLowerCase().includes(q);
+        if (!mTitle && !mCwd && !mModel) return false;
       }
       return true;
     });
 
     if (filtered.length === 0) {
-      elSessionsList.innerHTML = `<div style="text-align: center; color: var(--muted); padding: 30px 10px; font-size: 12px;">暂无匹配会话</div>`;
+      elSessList.innerHTML = `<div style="text-align: center; color: var(--muted); padding: 36px 12px; font-size: 12.5px;">没有找到匹配的会话</div>`;
       return;
     }
 
     filtered.forEach(s => {
-      const card = document.createElement("div");
-      card.className = `session-card ${s.id === activeSessionId ? "active" : ""}`;
-
-      let agentLabel = s.agentName || s.agent;
-      let badgeColor = "var(--accent)";
-      if (s.agent === "antigravity") badgeColor = "var(--c-system)";
-      else if (s.agent === "dsh") badgeColor = "var(--cyan)";
-      else if (s.agent === "codex") badgeColor = "var(--green)";
+      const row = document.createElement("div");
+      row.className = `row sess sess-link ${s.id === activeSessionId ? "active" : ""}`;
 
       const wm = s.watermarkPercent || 0;
       let wmColor = "var(--green)";
       if (wm > 75) wmColor = "var(--red)";
       else if (wm > 50) wmColor = "var(--amber)";
 
-      card.innerHTML = `
-        <div class="session-card-head">
-          <span class="session-agent-badge" style="color: ${badgeColor};">
-            <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:${badgeColor};"></span>
-            ${agentLabel}
-          </span>
-          <span class="session-time">${s.lastTime ? s.lastTime.slice(5, 16) : ""}</span>
+      const subParts = [
+        s.cwd ? baseName(s.cwd) : "",
+        s.model || "",
+        s.timeAgo || "",
+        `${s.turnsCount || 1} 轮`
+      ].filter(Boolean);
+
+      row.innerHTML = `
+        <div class="ag-handle" title="${s.agentName || s.agent}">
+          ${getAgentIconSvg(s.agent)}
         </div>
-        <div class="session-title" title="${s.name}">${s.name}</div>
-        <div class="session-stats-row">
-          <span class="session-tokens-badge">${formatNumber(s.currentTokens)} tok</span>
-          <span style="color: ${wmColor}; font-weight: 600;">${wm}% 水位</span>
-          ${s.compactionCount ? `<span style="color: var(--amber); font-size: 10px;">✂ ${s.compactionCount}</span>` : ""}
+        <div class="who">
+          <div class="name" title="${s.name || ''}">${s.name || '(未命名会话)'}</div>
+          <div class="sub" title="${s.cwd || ''}">${subParts.join(" · ")}</div>
         </div>
+        <div class="num">
+          <b>${formatNumber(s.currentTokens)} tok</b>
+          <small style="color: ${wmColor};">${wm}% 水位</small>
+        </div>
+        ${s.compactionCount ? `<span style="font-size:10px; color:var(--amber); background:var(--amber-soft); border-radius:4px; padding:1px 4px; font-weight:600;">✂ ${s.compactionCount}</span>` : ''}
+        <svg class="sess-chev" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 12 10 8 6 4"/>
+        </svg>
       `;
 
-      card.addEventListener("click", () => {
+      row.addEventListener("click", () => {
         selectSession(s.id);
+        // 小屏幕/移动端进入详情视图
+        elMainLayout.classList.add("detail-open");
       });
 
-      elSessionsList.appendChild(card);
+      elSessList.appendChild(row);
     });
   }
 
-  // 5. 切换会话
-  function selectSession(sessionId) {
-    activeSessionId = sessionId;
+  // 5. 选中会话
+  function selectSession(sid) {
+    activeSessionId = sid;
     const s = getActiveSession();
     if (!s) return;
 
-    $("active-session-title").textContent = s.name;
-    $("active-session-desc").textContent = `Agent: ${s.agentName || s.agent} · 模型: ${s.model} · 上下文上限: ${formatNumber(s.modelLimit)} Tokens`;
-
-    // 默认定位到最后或最大的轮次
+    // 默认定位到最后轮次
     activeTurnIdx = s.turns?.length ? s.turns[s.turns.length - 1].turnIdx : 1;
 
-    renderGlobalKpi();
     renderSessionsList();
-    renderTurnsScrubber();
-    renderEvolutionChart();
-    renderTurnInspector();
-    renderDiagnostics();
+    renderSessionDetailBanner(s);
+    renderTurnsBar(s);
+    renderContextEvolutionChart(s);
+    renderTurnInspector(s);
+    renderDiagnostics(s);
   }
 
-  // 6. 渲染轮次步进选择器
-  function renderTurnsScrubber() {
-    elTurnsSelector.innerHTML = "";
-    const s = getActiveSession();
+  // 6. 渲染会话详情 Header 与 dsh-context KPI
+  function renderSessionDetailBanner(s) {
+    elDetTitle.textContent = s.name || "(未命名会话)";
+    elDetSub.innerHTML = `
+      <span>Agent: <b style="color:var(--fg);">${s.agentName || s.agent}</b></span>
+      <span>·</span>
+      <span>模型: <b style="color:var(--fg);">${s.model}</b></span>
+      <span>·</span>
+      <span>目录: ${s.cwd ? baseName(s.cwd) : "默认工作区"}</span>
+      <span>·</span>
+      <span>活跃: ${s.lastTime || s.timeAgo || ""}</span>
+    `;
+
+    const wm = s.watermarkPercent || 0;
+    elDetWatermarkText.textContent = `${wm}% 水位`;
+    elDetLimitText.textContent = `/ ${formatNumber(s.modelLimit)} Tokens 上限`;
+    elDetProgressBar.style.width = `${Math.min(100, wm)}%`;
+
+    if (wm > 75) {
+      elDetProgressBar.style.background = "var(--red)";
+      elDetWatermarkText.style.color = "var(--red)";
+    } else if (wm > 50) {
+      elDetProgressBar.style.background = "var(--amber)";
+      elDetWatermarkText.style.color = "var(--amber)";
+    } else {
+      elDetProgressBar.style.background = "var(--green)";
+      elDetWatermarkText.style.color = "var(--green)";
+    }
+
+    elDetCurTokens.textContent = `${formatNumber(s.currentTokens)} tok`;
+    elDetPeakTokens.textContent = `${formatNumber(s.peakTokens)} tok`;
+    elDetTurnsCount.textContent = `${s.turnsCount} 轮`;
+    elDetCompCount.textContent = `${s.compactionCount || 0} 次`;
+    elDetCacheRead.textContent = formatNumber(s.totalCacheRead || 0);
+  }
+
+  // 7. 渲染轮次步进导航条
+  function renderTurnsBar(s) {
+    elTurnsBar.innerHTML = "";
     if (!s || !s.turns) return;
 
     s.turns.forEach(t => {
       const btn = document.createElement("button");
       btn.type = "button";
-      let cls = `turn-pill-btn ${t.turnIdx === activeTurnIdx ? "active" : ""}`;
+      let cls = `turn-pill ${t.turnIdx === activeTurnIdx ? "active" : ""}`;
       if (t.isCompaction) cls += " compaction";
       btn.className = cls;
 
@@ -203,24 +248,21 @@
       else if (t.isBloat) label += " ⚡";
 
       btn.textContent = label;
-      btn.title = `Turn #${t.turnIdx} (${formatNumber(t.totalTokens)} tokens)`;
+      btn.title = `Turn #${t.turnIdx} · ${formatNumber(t.totalTokens)} tok`;
 
       btn.addEventListener("click", () => {
         activeTurnIdx = t.turnIdx;
-        renderTurnsScrubber();
-        renderEvolutionChart();
-        renderTurnInspector();
+        renderTurnsBar(s);
+        renderContextEvolutionChart(s);
+        renderTurnInspector(s);
       });
 
-      elTurnsSelector.appendChild(btn);
+      elTurnsBar.appendChild(btn);
     });
   }
 
-  // 7. 渲染上下文增长演进图 (Evolution Stacked Chart on Canvas)
-  let chartHoverIdx = null;
-
-  function renderEvolutionChart() {
-    const s = getActiveSession();
+  // 8. 绘制 dsh-context 风格的上下文演进堆叠图 (Context Evolution Chart on Canvas)
+  function renderContextEvolutionChart(s) {
     if (!s || !elCanvas) return;
 
     const ctx = elCanvas.getContext("2d");
@@ -233,31 +275,25 @@
 
     const w = rect.width;
     const h = rect.height;
-
-    // 清空画布
     ctx.clearRect(0, 0, w, h);
 
     const turns = s.turns || [];
     if (turns.length === 0) return;
 
-    const padLeft = 50;
-    const padRight = 20;
+    const padLeft = 46;
+    const padRight = 16;
     const padTop = 20;
-    const padBottom = 30;
+    const padBottom = 26;
 
     const chartW = w - padLeft - padRight;
     const chartH = h - padTop - padBottom;
 
-    // 计算 Y 轴最大值
     const maxTokensInSession = Math.max(...turns.map(t => t.totalTokens), 1000);
-    const maxY = Math.max(maxTokensInSession * 1.18, 5000);
+    const maxY = Math.max(maxTokensInSession * 1.15, 6000);
 
-    // 绘制横向网格线与 Y 轴刻度
+    // 绘制横向网格刻度线
     const gridRows = 4;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.07)";
-    if (document.documentElement.dataset.theme === "light") {
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.06)";
-    }
+    ctx.strokeStyle = document.documentElement.dataset.theme === "light" ? "rgba(0,0,0,0.06)" : "rgba(255,255,255,0.06)";
     ctx.lineWidth = 1;
     ctx.fillStyle = "#88888e";
     ctx.font = "10px ui-monospace, sans-serif";
@@ -275,21 +311,19 @@
 
       let yLabel = Math.round(yVal);
       if (yVal >= 1000) yLabel = (yVal / 1000).toFixed(0) + "k";
-      ctx.fillText(yLabel, padLeft - 8, yPos);
+      ctx.fillText(yLabel, padLeft - 6, yPos);
     }
 
-    // X 轴坐标映射
     const getX = (idx) => {
       if (turns.length <= 1) return padLeft + chartW / 2;
       return padLeft + (idx / (turns.length - 1)) * chartW;
     };
 
-    // 辅助计算堆叠各层的 Y 坐标
     const getY = (val) => {
       return padTop + chartH - (val / maxY) * chartH;
     };
 
-    // 准备堆叠数据点 (从底向上: System, Tools, User & Assistant, Tool Results)
+    // 准备 4 层堆叠数据点 (System, Tools, Chat History, Tool Results)
     const points = turns.map((t, idx) => {
       const b = t.breakdown || {};
       const vSys = b.systemTokens || 0;
@@ -314,94 +348,82 @@
       };
     });
 
-    // 绘制分层填充区域 (Helper)
     function drawStackedLayer(upperKey, lowerKey, fillColor) {
       ctx.beginPath();
       ctx.fillStyle = fillColor;
-
-      // 顶部轮廓
       points.forEach((p, i) => {
         if (i === 0) ctx.moveTo(p.x, p[upperKey]);
         else ctx.lineTo(p.x, p[upperKey]);
       });
-
-      // 底部轮廓 (反向闭合)
       for (let i = points.length - 1; i >= 0; i--) {
         ctx.lineTo(points[i].x, points[i][lowerKey]);
       }
-
       ctx.closePath();
       ctx.fill();
     }
 
-    // 1. Layer: System (紫)
-    drawStackedLayer("y1", "y0", "rgba(168, 85, 247, 0.45)");
-
-    // 2. Layer: Tools (蓝)
-    drawStackedLayer("y2", "y1", "rgba(56, 189, 248, 0.5)");
-
-    // 3. Layer: Chat History (绿)
-    drawStackedLayer("y3", "y2", "rgba(16, 185, 129, 0.55)");
-
-    // 4. Layer: Tool Results (橙)
-    drawStackedLayer("y4", "y3", "rgba(249, 115, 22, 0.65)");
+    // 1. System Prompt (🟣)
+    drawStackedLayer("y1", "y0", "rgba(168, 85, 247, 0.42)");
+    // 2. Tools Definition (🔵)
+    drawStackedLayer("y2", "y1", "rgba(56, 189, 248, 0.48)");
+    // 3. Chat History (🟢)
+    drawStackedLayer("y3", "y2", "rgba(16, 185, 129, 0.52)");
+    // 4. Tool Results & Files (🟠)
+    drawStackedLayer("y4", "y3", "rgba(249, 115, 22, 0.62)");
 
     // 绘制总外轮廓线
     ctx.beginPath();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.lineWidth = 1.8;
     points.forEach((p, i) => {
       if (i === 0) ctx.moveTo(p.x, p.y4);
       else ctx.lineTo(p.x, p.y4);
     });
     ctx.stroke();
 
-    // 绘制各轮次数据点与事件标记 (✂ 压缩, ⚡ 膨胀)
+    // 绘制节点与事件标线 (✂ 压缩, ⚡ 膨胀)
     points.forEach((p) => {
       const isSelected = p.turn.turnIdx === activeTurnIdx;
 
-      // 绘制普通节点
       ctx.beginPath();
-      ctx.arc(p.x, p.y4, isSelected ? 5 : 3, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y4, isSelected ? 4.5 : 2.5, 0, Math.PI * 2);
       ctx.fillStyle = isSelected ? "#ffffff" : "var(--accent)";
       ctx.strokeStyle = isSelected ? "var(--accent)" : "rgba(255,255,255,0.4)";
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.8;
       ctx.fill();
       ctx.stroke();
 
-      // 压缩剪枝事件 (✂)
       if (p.turn.isCompaction) {
         ctx.save();
         ctx.strokeStyle = "var(--amber)";
-        ctx.setLineDash([3, 3]);
+        ctx.setLineDash([2, 2]);
         ctx.beginPath();
         ctx.moveTo(p.x, padTop);
         ctx.lineTo(p.x, padTop + chartH);
         ctx.stroke();
 
         ctx.fillStyle = "var(--amber)";
-        ctx.font = "bold 11px sans-serif";
+        ctx.font = "bold 10px sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText("✂ 压缩", p.x, padTop - 5);
+        ctx.fillText("✂ 压缩", p.x, padTop - 4);
         ctx.restore();
       }
 
-      // 膨胀预警事件 (⚡)
       if (p.turn.isBloat) {
         ctx.save();
         ctx.fillStyle = "var(--red)";
-        ctx.font = "11px sans-serif";
+        ctx.font = "10px sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText("⚡ 膨胀", p.x, p.y4 - 8);
+        ctx.fillText("⚡ 激增", p.x, p.y4 - 7);
         ctx.restore();
       }
     });
 
-    // 绘制当前选定轮次的高亮竖线
+    // 选定轮次竖向辅助线
     const curPoint = points.find(p => p.turn.turnIdx === activeTurnIdx);
     if (curPoint) {
       ctx.save();
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 2]);
       ctx.beginPath();
@@ -412,7 +434,7 @@
     }
   }
 
-  // Canvas 交互事件监听 (鼠标移动展示 Tooltip，点击切换轮次)
+  // Canvas 鼠标交互 (Tooltip 与点击切轮次)
   if (elCanvas) {
     elCanvas.addEventListener("mousemove", (e) => {
       const s = getActiveSession();
@@ -420,9 +442,8 @@
 
       const rect = elCanvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
-
-      const padLeft = 50;
-      const padRight = 20;
+      const padLeft = 46;
+      const padRight = 16;
       const chartW = rect.width - padLeft - padRight;
 
       const ratio = (mouseX - padLeft) / chartW;
@@ -462,8 +483,8 @@
 
       const rect = elCanvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
-      const padLeft = 50;
-      const padRight = 20;
+      const padLeft = 46;
+      const padRight = 16;
       const chartW = rect.width - padLeft - padRight;
 
       const ratio = (mouseX - padLeft) / chartW;
@@ -471,83 +492,75 @@
 
       if (idx >= 0 && idx < s.turns.length) {
         activeTurnIdx = s.turns[idx].turnIdx;
-        renderTurnsScrubber();
-        renderEvolutionChart();
-        renderTurnInspector();
+        renderTurnsBar(s);
+        renderContextEvolutionChart(s);
+        renderTurnInspector(s);
       }
     });
   }
 
-  // 8. 渲染当前选定轮次的内容透视 (Turn Inspector)
-  function renderTurnInspector() {
-    const s = getActiveSession();
+  // 9. 渲染单轮内容透视 (Turn Inspector - dsh-context 核心模块)
+  function renderTurnInspector(s) {
     if (!s) return;
 
     const turn = (s.turns || []).find(t => t.turnIdx === activeTurnIdx) || s.turns?.[0];
     if (!turn) {
-      elMessagesStream.innerHTML = `<div style="text-align: center; color: var(--muted); padding: 20px;">当前轮次暂无消息记录</div>`;
+      elMessagesList.innerHTML = `<div style="text-align: center; color: var(--muted); padding: 20px;">当前轮次暂无消息记录</div>`;
       return;
     }
 
-    elInspectTurnIdx.textContent = `Turn #${turn.turnIdx}`;
-    elInspectTurnTokens.textContent = `${formatNumber(turn.totalTokens)} Tokens`;
+    elInspTurnBadge.textContent = `Turn #${turn.turnIdx}`;
+    elInspTokens.textContent = `${formatNumber(turn.totalTokens)} Tokens`;
 
-    // 变化量
     const delta = turn.tokenDelta || 0;
     if (delta > 0) {
-      elInspectTurnDelta.textContent = `+${formatNumber(delta)}`;
-      elInspectTurnDelta.style.color = "var(--green)";
+      elInspDelta.textContent = `+${formatNumber(delta)} 增量`;
+      elInspDelta.style.color = "var(--green)";
     } else if (delta < 0) {
-      elInspectTurnDelta.textContent = `${formatNumber(delta)} (压缩)`;
-      elInspectTurnDelta.style.color = "var(--amber)";
+      elInspDelta.textContent = `${formatNumber(delta)} (压缩 ✂)`;
+      elInspDelta.style.color = "var(--amber)";
     } else {
-      elInspectTurnDelta.textContent = "首轮启动";
-      elInspectTurnDelta.style.color = "var(--muted)";
+      elInspDelta.textContent = "首轮启动";
+      elInspDelta.style.color = "var(--muted)";
     }
 
-    const pct = s.modelLimit ? Math.round((turn.totalTokens / s.modelLimit) * 100) : 0;
-    elInspectTurnPercent.textContent = `${pct}% 窗口`;
-
-    // 渲染消息流卡片
-    elMessagesStream.innerHTML = "";
+    elMessagesList.innerHTML = "";
     let msgs = turn.messages || [];
 
     // 角色过滤
-    if (roleFilter !== "all") {
-      msgs = msgs.filter(m => m.role === roleFilter);
+    if (activeRoleFilter !== "all") {
+      msgs = msgs.filter(m => m.role === activeRoleFilter);
     }
 
     if (msgs.length === 0) {
-      elMessagesStream.innerHTML = `<div style="text-align: center; color: var(--muted); padding: 24px;">该角色在此轮次无消息</div>`;
+      elMessagesList.innerHTML = `<div style="text-align: center; color: var(--muted); padding: 20px;">该角色在此轮次无消息</div>`;
       return;
     }
 
-    msgs.forEach((m) => {
+    msgs.forEach(m => {
       const card = document.createElement("div");
-      card.className = "message-item";
+      card.className = "msg-card";
 
-      const pctOfTurn = turn.totalTokens ? Math.round((m.tokens / turn.totalTokens) * 100) : 0;
+      const pct = turn.totalTokens ? Math.round((m.tokens / turn.totalTokens) * 100) : 0;
       let toolPills = "";
       if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
         toolPills = m.toolCalls.map(tc => `<span style="background:var(--card); border:1px solid var(--line); border-radius:3px; padding:1px 5px; font-size:10px; color:var(--cyan);">${tc}</span>`).join(" ");
       }
 
       card.innerHTML = `
-        <div class="message-head">
+        <div class="msg-head">
           <div style="display:flex; align-items:center; gap:8px;">
-            <span class="role-badge ${m.role}">${m.role}</span>
+            <span class="role-pill ${m.role}">${m.role}</span>
             ${toolPills}
             <span style="font-size:11px; color:var(--muted);">${m.chars ? formatNumber(m.chars) + ' 字符' : ''}</span>
           </div>
-          <div class="message-meta">
-            <span style="color:var(--fg-2); font-weight:600;">${formatNumber(m.tokens)} tok (${pctOfTurn}%)</span>
-            <div class="message-actions">
-              <button type="button" class="btn-mini btn-copy">复制</button>
-              <button type="button" class="btn-mini btn-toggle">收起</button>
-            </div>
+          <div class="msg-meta">
+            <span style="color:var(--fg-2); font-weight:600;">${formatNumber(m.tokens)} tok (${pct}%)</span>
+            <button type="button" class="btn-inline btn-copy">复制</button>
+            <button type="button" class="btn-inline btn-toggle">收起</button>
           </div>
         </div>
-        <div class="message-body">${escapeHtml(m.fullText || m.snippet || "")}</div>
+        <div class="msg-body">${escapeHtml(m.fullText || m.snippet || "")}</div>
       `;
 
       // 复制功能
@@ -555,13 +568,13 @@
       btnCopy.addEventListener("click", (e) => {
         e.stopPropagation();
         navigator.clipboard.writeText(m.fullText || m.snippet || "").then(() => {
-          showToast("已成功复制该消息全文到剪贴板！");
+          showToast("已成功复制该消息内容！");
         });
       });
 
-      // 折叠功能
+      // 收起/展开功能
       const btnToggle = card.querySelector(".btn-toggle");
-      const bodyEl = card.querySelector(".message-body");
+      const bodyEl = card.querySelector(".msg-body");
       btnToggle.addEventListener("click", (e) => {
         e.stopPropagation();
         if (bodyEl.style.display === "none") {
@@ -573,7 +586,7 @@
         }
       });
 
-      elMessagesStream.appendChild(card);
+      elMessagesList.appendChild(card);
     });
   }
 
@@ -585,22 +598,20 @@
       .replace(/>/g, "&gt;");
   }
 
-  // 9. 渲染诊断与 Top 上下文消耗源
-  function renderDiagnostics() {
-    const s = getActiveSession();
+  // 10. 渲染 Top 上下文消耗源与健康体检建议
+  function renderDiagnostics(s) {
     if (!s) return;
 
-    elTopConsumers.innerHTML = "";
-
-    // 收集该会话中各轮次的 Top 消息与工具消耗
+    elTopConsumersBody.innerHTML = "";
     const consumers = [];
+
     (s.turns || []).forEach(t => {
       (t.messages || []).forEach(m => {
-        if (m.tokens > 1000) {
+        if (m.tokens > 800) {
           let name = m.role.toUpperCase();
           if (m.toolCalls?.length) name = `工具调用: ${m.toolCalls.join(",")}`;
           else if (m.role === "tool") name = "工具返回值 / 文件读取";
-          else if (m.role === "system") name = "系统身份 / 指令设定";
+          else if (m.role === "system") name = "系统提示词 / 指令定义";
 
           consumers.push({
             name,
@@ -616,7 +627,7 @@
     const top5 = consumers.slice(0, 5);
 
     if (top5.length === 0) {
-      elTopConsumers.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--muted); padding:16px;">未检测到单项超过 1,000 Token 的大型数据块</td></tr>`;
+      elTopConsumersBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--muted); padding:14px;">未检测到超过 800 Token 的单项大型数据块</td></tr>`;
     } else {
       top5.forEach(c => {
         const tr = document.createElement("tr");
@@ -624,31 +635,29 @@
           <td style="color:var(--fg); font-weight:500;">${c.name}</td>
           <td>${c.turn}</td>
           <td style="color:var(--c-toolres); font-weight:700;">${formatNumber(c.tokens)}</td>
-          <td>${c.pct}% 峰值</td>
+          <td>${c.pct}%</td>
         `;
-        elTopConsumers.appendChild(tr);
+        elTopConsumersBody.appendChild(tr);
       });
     }
 
-    // 右侧健康度建议
+    // 健康体检建议
     elHealthTips.innerHTML = "";
     const tips = [];
-
     const wm = s.watermarkPercent || 0;
+
     if (wm < 35) {
-      tips.push(`<div style="display:flex; align-items:center; gap:6px;"><span style="color:var(--green);">●</span> 上下文余量充足，当前占用仅 ${wm}%，Agent 思考与检索处于极佳状态。</div>`);
+      tips.push(`<div style="display:flex; align-items:center; gap:6px;"><span style="color:var(--green);">●</span> 上下文余量充裕 (${wm}%)，模型注意力与长文本推理处于极佳窗口。</div>`);
     } else if (wm > 75) {
-      tips.push(`<div style="display:flex; align-items:center; gap:6px;"><span style="color:var(--red);">⚠️</span> 上下文已达 ${wm}%，接近模型极限，极易导致遗忘或截断，建议触发压缩 (Compaction) 或开启新会话。</div>`);
+      tips.push(`<div style="display:flex; align-items:center; gap:6px;"><span style="color:var(--red);">⚠️</span> 上下文占用已达 ${wm}%，接近物理上限，建议精简长命令输出或触发 Compaction。</div>`);
     }
 
     if (s.compactionCount > 0) {
-      tips.push(`<div style="display:flex; align-items:center; gap:6px;"><span style="color:var(--amber);">✂</span> 本会话已有效执行了 ${s.compactionCount} 次历史压缩，精简了冗余工具输出。</div>`);
-    } else {
-      tips.push(`<div style="display:flex; align-items:center; gap:6px;"><span style="color:var(--cyan);">ℹ</span> 尚未发生自动压缩，历史多轮工具调用均完整保留在上下文流中。</div>`);
+      tips.push(`<div style="display:flex; align-items:center; gap:6px;"><span style="color:var(--amber);">✂</span> 本会话已有效执行 ${s.compactionCount} 次历史压缩，成功释放了冗余工具输出占用。</div>`);
     }
 
     if (s.bloatCount > 0) {
-      tips.push(`<div style="display:flex; align-items:center; gap:6px;"><span style="color:var(--red);">⚡</span> 检测到 ${s.bloatCount} 次单轮 Token 激增 (>15,000 Tokens)，多由大文件全量读取或超长 Shell 输出引起。</div>`);
+      tips.push(`<div style="display:flex; align-items:center; gap:6px;"><span style="color:var(--red);">⚡</span> 检测到 ${s.bloatCount} 次单轮 Token 激增 (>15,000 Tokens)，多由大文件全量读取引起。</div>`);
     }
 
     tips.forEach(html => {
@@ -658,69 +667,81 @@
     });
   }
 
-  // 10. 事件绑定
+  // 11. 绑定交互事件
   function bindEvents() {
-    // 客户端分类切换
-    if (elAgentFilters) {
-      elAgentFilters.addEventListener("click", (e) => {
-        const btn = e.target.closest(".filter-btn");
+    // Agent Tab 分段筛选
+    if (elAgentSegs) {
+      elAgentSegs.addEventListener("click", (e) => {
+        const btn = e.target.closest(".opt");
         if (!btn) return;
-        elAgentFilters.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        agentFilter = btn.dataset.agent;
+        elAgentSegs.querySelectorAll(".opt").forEach(b => b.classList.remove("on"));
+        btn.classList.add("on");
+        activeAgentFilter = btn.dataset.agent;
         renderSessionsList();
       });
     }
 
-    // 角色分类切换
-    if (elRoleFilters) {
-      elRoleFilters.addEventListener("click", (e) => {
-        const btn = e.target.closest(".filter-btn");
+    // Role 筛选
+    if (elRoleSegs) {
+      elRoleSegs.addEventListener("click", (e) => {
+        const btn = e.target.closest(".opt");
         if (!btn) return;
-        elRoleFilters.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        roleFilter = btn.dataset.role;
-        renderTurnInspector();
+        elRoleSegs.querySelectorAll(".opt").forEach(b => b.classList.remove("on"));
+        btn.classList.add("on");
+        activeRoleFilter = btn.dataset.role;
+        renderTurnInspector(getActiveSession());
       });
     }
 
-    // 会话搜索
-    if (elSessionSearch) {
-      elSessionSearch.addEventListener("input", (e) => {
+    // 搜索
+    if (elSessQ) {
+      elSessQ.addEventListener("input", (e) => {
         searchQuery = e.target.value.trim();
         renderSessionsList();
       });
     }
 
-    // 刷新按钮
-    $("btn-refresh")?.addEventListener("click", () => {
-      if (Array.isArray(window.CONTEXT_SESSIONS)) {
-        sessions = [...window.CONTEXT_SESSIONS];
-        summary = window.CONTEXT_SUMMARY || {};
-        renderGlobalKpi();
-        renderSessionsList();
-        renderEvolutionChart();
-        renderTurnInspector();
-        renderDiagnostics();
-        showToast("已成功同步最新上下文数据！");
-      }
-    });
+    // 移动端返回会话列表按钮
+    if (elBtnBackToList) {
+      elBtnBackToList.addEventListener("click", () => {
+        elMainLayout.classList.remove("detail-open");
+      });
+    }
+
+    // 刷新数据
+    if (elBtnRefresh) {
+      elBtnRefresh.addEventListener("click", () => {
+        if (Array.isArray(window.CONTEXT_SESSIONS)) {
+          rawSessions = [...window.CONTEXT_SESSIONS];
+          summary = window.CONTEXT_SUMMARY || {};
+          renderGlobalKpi();
+          renderSessionsList();
+          const cur = getActiveSession();
+          if (cur) {
+            selectSession(cur.id);
+          }
+          showToast("已成功同步最新上下文数据！");
+        }
+      });
+    }
 
     // 主题切换
-    $("btn-theme-toggle")?.addEventListener("click", () => {
-      const cur = document.documentElement.dataset.theme;
-      const next = cur === "light" ? "dark" : "light";
-      document.documentElement.dataset.theme = next;
-      renderEvolutionChart();
-    });
+    if (elBtnTheme) {
+      elBtnTheme.addEventListener("click", () => {
+        const cur = document.documentElement.dataset.theme;
+        const next = cur === "light" ? "dark" : "light";
+        document.documentElement.dataset.theme = next;
+        renderContextEvolutionChart(getActiveSession());
+      });
+    }
 
-    // 窗口尺寸自适应重新绘制图表
+    // 窗口尺寸变化重绘图表
     window.addEventListener("resize", () => {
-      renderEvolutionChart();
+      renderContextEvolutionChart(getActiveSession());
     });
   }
 
-  // 11. 初始化与 Magpie Bridge 联动
+  // 12. 初始化
   async function init() {
     if (globalThis.magpie) {
       try {
@@ -731,16 +752,17 @@
         if (magpie.onTheme) {
           magpie.onTheme((t) => {
             document.documentElement.dataset.theme = t.dark ? "dark" : "light";
-            renderEvolutionChart();
+            renderContextEvolutionChart(getActiveSession());
           });
         }
       } catch (e) {}
     }
 
     bindEvents();
+    renderGlobalKpi();
 
-    if (sessions.length > 0) {
-      selectSession(sessions[0].id);
+    if (rawSessions.length > 0) {
+      selectSession(rawSessions[0].id);
     } else {
       renderSessionsList();
     }
