@@ -1,4 +1,12 @@
 node_modules/
+# daemon 生成的每会话详情分片 (page/context-data.js 为索引, 分片可随时重建)
+page/data/
+# context-data.js 为 daemon 自动生成的会话索引 (含真实会话名/路径), 不入库也不进 npm 包
+page/context-data.js
+# 测试 harness 生成的运行期镜像 (daemon.mjs 及其依赖的副本, 每次测试自动重建)
+tests/helpers/.daemon_exports.mjs
+tests/helpers/dsh-events.mjs
+tests/helpers/dsh-fileops.mjs
 .DS_Store
 *.log
 npm-debug.log*

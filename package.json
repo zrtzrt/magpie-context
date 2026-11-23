@@ -7,7 +7,11 @@
   "files": [
     "index.js",
     "daemon.mjs",
-    "page",
+    "page/index.html",
+    "page/style.css",
+    "page/app.js",
+    "page/icons.js",
+    "page/icon.svg",
     "README.md",
     "README.en.md",
     "LICENSE"
