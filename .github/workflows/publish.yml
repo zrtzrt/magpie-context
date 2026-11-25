@@ -55,22 +55,21 @@ jobs:
           test "$TAG" = "$PKG" || { echo "tag 与 package.json 版本不一致"; exit 1; }
       - name: Check tarball contents (no session data / secrets)
         run: |
-          npm pack --silent --json > pack.json
-          node -e '
-            const p = require("./pack.json")[0];
-            const bad = p.files.map(f => f.path).filter(x =>
-              /(^|\/)(context-data\.js|data\/|usage-cluster|session\.v4|\.credentials)/.test(x)
-            );
-            if (bad.length) { console.error("tarball 含私有数据:", bad); process.exit(1); }
-            console.log("tarball files:", p.files.length, "size:", p.size);
-          '
+          TGZ="$(npm pack --silent | tail -n 1)"
+          test -f "$TGZ" || { echo "npm pack 未产出 tarball"; exit 1; }
+          echo "$TGZ" > tarball-name.txt
+          tar -tzf "$TGZ" > tarball-files.txt
+          if grep -E '(^|/)(context-data\.js|data/|usage-cluster|session\.v4|\.credentials)' tarball-files.txt; then
+            echo "tarball 含私有数据"; exit 1
+          fi
+          echo "tarball files: $(wc -l < tarball-files.txt)"
       - name: Publish to npm with provenance
         run: npm publish --provenance --access public
       - name: Create GitHub Release with tarball
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TGZ="$(node -e 'const p=require("./pack.json")[0];process.stdout.write(p.filename)')"
+          TGZ="$(cat tarball-name.txt)"
           gh release create "$GITHUB_REF_NAME" "$TGZ" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes
