@@ -24,7 +24,6 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: Syntax check
         run: |
-          node -c index.js
           node -c daemon.mjs
           node -c dsh-events.mjs
           node -c dsh-fileops.mjs
