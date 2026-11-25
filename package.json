@@ -7,7 +7,7 @@
     "sync": "node bin/magpie-context.mjs sync",
     "watch": "node bin/magpie-context.mjs watch",
     "doctor": "node bin/magpie-context.mjs doctor",
-    "prepack": "node scripts/ensure-placeholder.mjs",
+    "prepack": "node scripts/ensure-placeholder.mjs --pack",
     "postpack": "node scripts/restore-local.mjs"
   },
   "bin": {

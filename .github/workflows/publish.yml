@@ -58,9 +58,15 @@ jobs:
           test -f "$TGZ" || { echo "npm pack 未产出 tarball"; exit 1; }
           echo "$TGZ" > tarball-name.txt
           tar -tzf "$TGZ" > tarball-files.txt
-          if grep -E '(^|/)(context-data\.js|data/|usage-cluster|session\.v4|\.credentials)' tarball-files.txt; then
+          # page/data/ 是本机会话正文分片，任何情况下都不能进包
+          if grep -E '(^|/)(data/|usage-cluster|session\.v4|\.credentials)' tarball-files.txt; then
             echo "tarball 含私有数据"; exit 1
           fi
+          # 索引必须在包里（否则装完插件页面 404），但只能是占位版本
+          tar -xzf "$TGZ" package/page/context-data.js -O > packed-index.js
+          grep -q CONTEXT_DATA_PLACEHOLDER packed-index.js || { echo "tarball 里的索引不是占位版本"; exit 1; }
+          grep -q 'window.CONTEXT_SESSIONS = \[\];' packed-index.js || { echo "tarball 里的索引含真实会话"; exit 1; }
+          if grep -qE 'sk-[A-Za-z0-9]{16,}' packed-index.js; then echo "tarball 索引含密钥"; exit 1; fi
           echo "tarball files: $(wc -l < tarball-files.txt)"
       - name: Publish to npm with provenance
         run: npm publish --provenance --access public

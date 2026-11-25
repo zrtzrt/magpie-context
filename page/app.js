@@ -775,7 +775,9 @@
   function isPlaceholderDataset() {
     if (window.CONTEXT_DATA_PLACEHOLDER === true) return true;
     const list = window.CONTEXT_SESSIONS;
-    if (!Array.isArray(list)) return false;
+    // 索引脚本压根没加载到 (从 GitHub 安装时仓库里没有这个生成物, 脚本 404)
+    // 与「生成了但会话数为 0」都是「还没有本地数据」, 不是加载失败。
+    if (!Array.isArray(list)) return true;
     return list.length === 0 && Object.keys(detailFiles()).length === 0;
   }
 

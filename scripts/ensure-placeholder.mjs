@@ -11,6 +11,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// --pack: 打包前使用（真实索引先备份再替换成占位，postpack 还原）
+// 默认:    安装时使用（只在文件缺失时补占位，绝不覆盖本机真实数据）
+const PACK_MODE = process.argv.includes("--pack");
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pageDir = path.resolve(here, "../page");
 const indexPath = path.join(pageDir, "context-data.js");
@@ -18,7 +22,13 @@ const backupPath = path.join(pageDir, ".context-data.local.js");
 
 if (fs.existsSync(indexPath)) {
   const existing = fs.readFileSync(indexPath, "utf8");
-  if (!existing.includes("CONTEXT_DATA_PLACEHOLDER")) {
+  const isReal = !existing.includes("CONTEXT_DATA_PLACEHOLDER");
+  if (isReal && !PACK_MODE) {
+    // 安装路径：本机已有真实数据，绝不动它
+    console.error("[ensure-placeholder] 已有索引，保持原样");
+    process.exit(0);
+  }
+  if (isReal && PACK_MODE) {
     fs.copyFileSync(indexPath, backupPath);
     console.error("[ensure-placeholder] 已备份真实索引 → page/.context-data.local.js");
   }

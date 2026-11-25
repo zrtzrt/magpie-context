@@ -1,7 +1,8 @@
 node_modules/
 # daemon 生成的每会话详情分片 (page/context-data.js 为索引, 分片可随时重建)
 page/data/
-# context-data.js 为 daemon 自动生成的会话索引 (含真实会话名/路径), 不入库也不进 npm 包
+# context-data.js 为 daemon 自动生成的会话索引 (含真实会话名/路径), 不入库也不进 npm 包。
+# npm 包里的那份由 prepack 写入的占位索引代替 (会话数恒为 0)。
 page/context-data.js
 # 打包时 ensure-placeholder 的临时备份 (真实索引), 绝不入库
 page/.context-data.local.js
