@@ -13,3 +13,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .npm/
+# 版本恢复过程的产物 (截图/历史快照/报告), 不属于插件源码
+_recovery/
+RECOVERY-REPORT.md
+RECOVERY-REPORT-1116.md
