@@ -12,6 +12,9 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 describe("Tier 4 - Real-World Session Data & dsh-context Data Parity Acceptance", () => {
   const HOME = process.env.HOME || "";
   const brainDir = path.join(HOME, ".gemini/antigravity/brain");
+  const hasRealTranscripts = fs.existsSync(brainDir) && fs.readdirSync(brainDir).some(name =>
+    fs.existsSync(path.join(brainDir, name, ".system_generated/logs/transcript.jsonl"))
+  );
 
   it("should successfully aggregate sessions using buildContextDataset() without unhandled errors", async () => {
     const daemon = await loadDaemon();
@@ -98,6 +101,11 @@ describe("Tier 4 - Real-World Session Data & dsh-context Data Parity Acceptance"
   });
 
   it("should generate valid page/context-data.js on syncContextData()", async () => {
+    // CI 环境没有本地会话记录, sync 不会产出 context-data.js —— 该用例依赖真实数据, 跳过。
+    if (!hasRealTranscripts) {
+      console.log("[Skip] No real transcripts; context-data.js is a generated local artifact");
+      return;
+    }
     const contextDataPath = path.join(PROJECT_ROOT, "page/context-data.js");
 
     // Verify context-data.js exists and is syntactically valid
