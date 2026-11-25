@@ -63,7 +63,7 @@ jobs:
             echo "tarball 含私有数据"; exit 1
           fi
           # 索引必须在包里（否则装完插件页面 404），但只能是占位版本
-          tar -xzf "$TGZ" package/page/context-data.js -O > packed-index.js
+          tar -xOzf "$TGZ" package/page/context-data.js > packed-index.js
           grep -q CONTEXT_DATA_PLACEHOLDER packed-index.js || { echo "tarball 里的索引不是占位版本"; exit 1; }
           grep -q 'window.CONTEXT_SESSIONS = \[\];' packed-index.js || { echo "tarball 里的索引含真实会话"; exit 1; }
           if grep -qE 'sk-[A-Za-z0-9]{16,}' packed-index.js; then echo "tarball 索引含密钥"; exit 1; fi
