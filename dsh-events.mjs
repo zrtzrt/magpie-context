@@ -2335,6 +2335,10 @@ export function foldItemsToCompact(steps, keepSteps) {
         if (it && typeof it.sx === "number") compactItem.sx = it.sx;
         // 短文本没有入池 (tx/sx 不存在) → 正文/摘要仍要原样保留, 不能因紧凑化丢掉
         if (it && typeof it.tx !== "number" && typeof it.fullText === "string") compactItem.fullText = it.fullText;
+        // 截断标记必须随条目保留: 正文在 clipText 阶段已截断并带「…(已截断, 原文 N 字符)」标注,
+        // 但紧凑化若丢掉 truncated, 消费方会把「已截断」误当成「完整正文」——
+        // 真实数据抽检 (dsh_events_fleet_payload) 就是靠这条断言抓到的。
+        if (it && it.truncated === true) compactItem.truncated = true;
         // page 摘要位直接用 item.snippet: 池化后保留内联预览 (池内摘要的前缀), 否则列表变空白
         if (it && typeof it.snippet === "string" && it.snippet !== "") compactItem.snippet = it.snippet;
         return compactItem;

@@ -3,6 +3,8 @@ node_modules/
 page/data/
 # context-data.js 为 daemon 自动生成的会话索引 (含真实会话名/路径), 不入库也不进 npm 包
 page/context-data.js
+# 打包时 ensure-placeholder 的临时备份 (真实索引), 绝不入库
+page/.context-data.local.js
 # 测试 harness 生成的运行期镜像 (daemon.mjs 及其依赖的副本, 每次测试自动重建)
 tests/helpers/.daemon_exports.mjs
 tests/helpers/dsh-events.mjs

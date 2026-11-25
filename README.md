@@ -49,30 +49,39 @@
 
 ## 📦 安装方式
 
-### 方式 1：本地源码挂载安装（推荐）
-在终端中执行：
 ```bash
-# 挂载当前目录至 Magpie
-magpie plugin add /Users/reno/Documents/code/tools/magpie-context
-```
+# 从 npm 安装（推荐）
+magpie plugin add magpie-context
 
-### 方式 2：通过 GitHub 安装
-```bash
+# 或从源码 / GitHub
+magpie plugin add /path/to/magpie-context
 magpie plugin add github:zrtzrt/magpie-context
 ```
 
+安装后页面里会显示「还没有本地数据」的引导，跑一次同步命令即可：
+
+```bash
+npx magpie-context sync     # 生成索引，重开页面就能看到数据
+npx magpie-context watch    # 可选：每 5 秒增量同步，保持实时
+npx magpie-context doctor   # 可选：检查数据源与输出是否就绪
+```
+
+> **为什么安装后还要跑一条命令？**
+> Magpie 的页面插件跑在 `sandbox="allow-scripts"` 的沙盒里，CSP 是 `connect-src 'none'`：
+> 页面既读不了磁盘，也发不出任何请求（连同源 `fetch` 都被拦），而**只有页面的插件不会启动插件宿主**，
+> 所以没有后台进程能替它生成数据。数据只能由你在本机跑命令写入插件目录，页面再用自己的 `<script src>` 加载。
+> 这与 `magpie-models-price` 等页面插件是同一套做法。
+
 ---
 
-## 🛠️ 本地调试与后台同步
+## 🛠️ 本地调试
 
 ```bash
 cd magpie-context
-
-# 启动数据实时同步守护进程
-node daemon.mjs
+node bin/magpie-context.mjs watch   # 等价于 npm run watch
 ```
 
-进入 Magpie 桌面客户端或 Web 控制台，在左侧导航点击 **「上下文透视」** 即可体验。
+进入 Magpie 桌面客户端或 Web 控制台，在左侧导航点击 **「上下文」** 即可体验。
 
 ---
 
@@ -87,7 +96,8 @@ node daemon.mjs
 
 * **首屏骨架屏**：`index.html` 内静态骨架先绘制，索引到达后真实内容原地出现，骨架作为覆盖层 180ms 淡出（Magpie 会话大厅风格虹彩 shimmer，尊重 `prefers-reduced-motion`）。
 * **弹窗骨架屏**：点击会话立即打开弹窗并展示四块占位（统计 / 双环图 / 趋势 / 浏览器），详情到达后渲染。
-* **详情加载三级兜底**：`<script src>` → 同源 `fetch` + 内联执行 → 弹窗内错误态 + 重试，绝不白屏；会话行 `pointerenter` 预取（并发 3）。
+* **详情加载单一合规路径**：`<script src>` 注入 → 失败即弹窗内错误态 + 重试，绝不白屏；会话行 `pointerenter` 预取（并发 3）。
+  > 不能用 `fetch`：Magpie 页面沙盒的 CSP 是 `connect-src 'none'`，同源 fetch 一样被拦，内联脚本同样被禁 —— 只有「自己的脚本文件」这一条路。
 * **确定性数据**：`callId` 等一律用内容哈希生成（不使用 `Date.now()` / `Math.random()`），同一输入多次 sync 产物逐字节一致；未变化的详情文件不重写。
 * **原子落盘**：索引与详情均先写 `.tmp` 再 `rename`；每次 sync 清理过期分片。
 
@@ -105,11 +115,35 @@ DSH 会话直接折叠 `~/.dsh/sessions/**/session.v4.jsonl.zstd` 事件流（`t
 ```bash
 npm run sync   # 单次生成 page/context-data.js 与 page/data/*
 npm run watch  # 每 5s 增量同步（内容未变的会话不会重写）
-npm test       # 184 个用例（含真实会话数据真值对照）
+npm test       # 含真实会话数据真值对照 + 插件规范一致性检查
 ```
 
 
 ---
+
+## 📐 Magpie 插件规范符合性
+
+对照官方文档 [编写插件 · 窗口里的页面](https://usemagpie.ai/docs/zh/plugins) 逐条实现，并由 `tests/plugin_spec_compliance.test.mjs` 守着：
+
+| 规范要求 | 本插件的实现 |
+|---|---|
+| `magpie.page` 提供 `title`/`file`/`icon`/`titles` | 已提供，四语言标签（zh / zh-TW / en / ja），图标为包内 `page/icon.svg` |
+| 10 秒内调用 `magpie.ready` 否则显示「没有回应」 | 脚本加载即握手，跟随窗口主题（`onTheme`）与 `data-theme` |
+| 只能加载 `file` 所在目录内的文件 | 所有资源均为 `page/` 内相对路径，无 CDN、无外链 |
+| `connect-src 'none'`：禁 fetch / WebSocket / beacon | 页面**零网络调用**，数据全部走 `<script src>` |
+| 脚本必须是文件，不能内联 | `index.html` 只有 `<script src>`，无内联脚本、无内联事件处理器 |
+| `permissions` 只声明真正用到的读取 | **不声明任何权限** —— 本插件不读用量/供应商，只读本地生成的索引文件 |
+| 页面拿不到磁盘，数据需预先产出 | `npx magpie-context sync` 生成索引；无数据时显示明确引导，而非「加载失败」 |
+| 不把机密数据发给页面 | 打包时用占位索引替换真实数据，`page/data/` 永不出包（见下） |
+
+### 私有数据保护
+
+`page/context-data.js` 与 `page/data/*.js` 是**本机生成的会话数据**（含会话标题、工作区路径、对话正文）。
+
+- `.gitignore` 排除二者，仓库里没有你的会话；
+- `.npmignore` 再排除 `page/data/`（正文分片永不进包）；
+- `prepack` 把真实索引备份到 `page/.context-data.local.js` 并写入 583 字节**占位索引**（会话数恒为 0），
+  `postpack` 再还原 —— 所以 npm 包里不可能带上你的会话，同时装完插件页面也不会 404。
 
 ## 📄 开源许可证
 

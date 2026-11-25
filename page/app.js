@@ -4,6 +4,44 @@
   const $ = (id) => document.getElementById(id);
 
   // ==========================================================================
+  // 0. Magpie 桥接握手 (官方规范: 页面必须在 10 秒内调用 magpie.ready,
+  //    否则窗口把它标记为「没有回应」并显示「此页面已停止工作」)。
+  //    bridge.js 由 magpie 在页面旁侧提供; 直接用浏览器打开本文件时
+  //    window.magpie 不存在, 因此全部做存在性判断, 页面照常可用。
+  // ==========================================================================
+  const magpieBridge = (typeof window !== "undefined" && window.magpie) ? window.magpie : null;
+
+  /** 窗口主题 → <html data-theme>/lang (bridge 也会设置, 这里保证 CSS 变量同步) */
+  function applyWindowTheme(theme) {
+    try {
+      const root = document.documentElement;
+      if (!root || !theme) return;
+      if (typeof theme.dark === "boolean") {
+        root.dataset.theme = theme.dark ? "dark" : "light";
+        root.style.colorScheme = theme.dark ? "dark" : "light";
+      }
+      if (theme.lang) root.setAttribute("lang", theme.lang);
+    } catch (e) { /* 主题同步失败不影响数据渲染 */ }
+  }
+
+  /**
+   * 与窗口握手。返回的 promise 永不 reject, 也不阻塞首屏渲染 ——
+   * 数据脚本先到先画, 主题到达后再补一次重绘由 bridge 的 CSS 变量自动生效。
+   */
+  const bridgeReady = (async () => {
+    if (!magpieBridge || typeof magpieBridge.ready !== "function") return null;
+    try {
+      const theme = await magpieBridge.ready();
+      applyWindowTheme(theme);
+      if (typeof magpieBridge.onTheme === "function") magpieBridge.onTheme(applyWindowTheme);
+      return theme;
+    } catch (err) {
+      try { console.warn("[context] magpie.ready 失败:", (err && err.message) || err); } catch (e) { /* 忽略 */ }
+      return null;
+    }
+  })();
+
+  // ==========================================================================
   // 0. 全局错误兜底 (绝不白屏 / 绝不静默失败)
   //    任何未捕获异常 / 未处理的 Promise 拒绝 → 页面顶部一条可关闭的红色提示条
   //    (纯内联样式, 不依赖 style.css), 最多同时 3 条, 超出丢弃最旧的一条。
@@ -70,7 +108,6 @@
   // 兜底链: ① <script src> 注入 (script-src 'self') → ② fetch + 内联执行 (connect-src 'self' + script-src 'unsafe-inline')
   //         → ③ 弹窗内错误态 + 重试。任一层成功即止, 绝不白屏。
   const DETAIL_SCRIPT_TIMEOUT_MS = 6000; // ① <script src> 注入超时
-  const DETAIL_FETCH_TIMEOUT_MS = 6000;  // ② fetch + 内联执行超时
   const INDEX_SCRIPT_TIMEOUT_MS = 15000; // 索引脚本刷新超时 (脚本层 / fetch 层各自计时)
   const DETAIL_MAX_CONCURRENCY = 3;    // 预取并发上限 (指针悬停预取)
   const detailLoads = new Map();       // sessionId -> { promise } 在途/已完成的详情加载
@@ -411,31 +448,6 @@
     });
   }
 
-  /** 内联执行一段脚本源码 (CSP script-src 'unsafe-inline' 允许) */
-  function executeInlineScript(source) {
-    const script = document.createElement("script");
-    script.textContent = source;
-    document.head.appendChild(script);
-    if (script.parentNode) script.parentNode.removeChild(script);
-    return true;
-  }
-
-  /** ② fetch 同源文本 + 内联执行 (CSP connect-src 'self' 允许) */
-  async function fetchAndInlineExecute(src, timeoutMs) {
-    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const timer = setTimeout(() => { if (controller) controller.abort(); }, timeoutMs);
-    try {
-      const res = await fetch(src, { cache: "no-store", signal: controller ? controller.signal : undefined });
-      if (!res.ok) throw new Error("FETCH_HTTP_" + res.status);
-      const text = await res.text();
-      if (!text) throw new Error("FETCH_EMPTY");
-      executeInlineScript(text);
-      return true;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   /**
    * 确保会话详情就绪 (三级兜底, 绝不白屏)。
    * 1) 命中 window.CONTEXT_SESSION_DETAIL[id] → 直接 resolve;
@@ -465,21 +477,15 @@
     if (!src) return Promise.reject(new Error("DETAIL_NOT_FOUND"));
 
     const promise = (async () => {
-      // ① 首选: 注入 <script src>
+      // Magpie 页面沙盒的 CSP 是 connect-src 'none' 且禁止内联脚本,
+      // 因此 fetch / 内联执行都不可能成功 —— 唯一合规路径是注入自己的 <script src>。
       try {
         await injectScriptTag(src, DETAIL_SCRIPT_TIMEOUT_MS, sessionId);
         const full = readCachedDetail(sessionId);
         if (full) return full;
-      } catch (err) { /* 落到 ② fetch 兜底 */ }
-
-      // ② 兜底: fetch 同源文本 + 内联执行
-      try {
-        await fetchAndInlineExecute(src, DETAIL_FETCH_TIMEOUT_MS);
-        const full = readCachedDetail(sessionId);
-        if (full) return full;
-      } catch (err) { /* 落到 ③ 错误态 */ }
-
-      // ③ 两层都失败
+      } catch (err) {
+        throw new Error("DETAIL_UNAVAILABLE");
+      }
       throw new Error("DETAIL_UNAVAILABLE");
     })();
 
@@ -757,6 +763,44 @@
         <div style="font-size: 24px; margin-bottom: 8px;">⚠️</div>
         <div>索引数据加载失败</div>
         <div style="font-size: 11.5px; margin-top: 4px; color: var(--faint);">点击右上角「刷新」重新拉取索引</div>
+      </div>
+    `;
+  }
+
+  /**
+   * 数据集是否为「尚未生成」的占位。
+   * npm 安装后 page/context-data.js 是打包时写入的空索引 (window.CONTEXT_DATA_PLACEHOLDER),
+   * 用户跑过一次同步命令才会被真实数据覆盖。
+   */
+  function isPlaceholderDataset() {
+    if (window.CONTEXT_DATA_PLACEHOLDER === true) return true;
+    const list = window.CONTEXT_SESSIONS;
+    if (!Array.isArray(list)) return false;
+    return list.length === 0 && Object.keys(detailFiles()).length === 0;
+  }
+
+  /**
+   * 尚未生成本地数据时的引导态。
+   * 这是 npm 安装后的正常首屏 —— 页面插件跑在自己的沙盒里 (connect-src 'none'),
+   * 读不了磁盘也发不出请求, 数据必须由用户在插件目录里跑同步命令生成。
+   */
+  function renderNoDataState() {
+    if (!elWorkspaceTree) return;
+    elWorkspaceTree.innerHTML = `
+      <div style="padding: 36px 20px; text-align: center; color: var(--muted); max-width: 640px; margin: 0 auto;">
+        <div style="font-size: 24px; margin-bottom: 8px;">🗂️</div>
+        <div style="font-size: 14px; color: var(--fg); margin-bottom: 6px;">还没有本地数据</div>
+        <div style="font-size: 12px; line-height: 1.7; color: var(--faint);">
+          这个页面只读本机日志（Magpie / DSH / Antigravity / Codex），不联网、也不上传任何内容。<br>
+          安装后需要先跑一次同步命令，把索引写进插件自己的 page 目录：
+        </div>
+        <div style="margin: 14px 0 10px; padding: 10px 12px; border-radius: 8px; background: rgba(127,127,127,0.12); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); user-select: all; word-break: break-all;">
+          npx magpie-context sync
+        </div>
+        <div style="font-size: 11.5px; line-height: 1.7; color: var(--faint);">
+          想保持实时就再跑 <code style="font-family: inherit;">npx magpie-context watch</code>，然后重新打开本页。<br>
+          同步只写本地文件，页面按 <code style="font-family: inherit;">&lt;script src&gt;</code> 加载，符合 Magpie 的页面沙盒策略。
+        </div>
       </div>
     `;
   }
@@ -5235,6 +5279,17 @@
     // 首屏: 骨架屏 (静态 HTML 已在解析期可见) 先出, 索引数据就绪后渲染真实内容并淡出
     renderPageSkeleton();
 
+    // 未生成数据 (刚安装) → 明确的设置引导, 而不是空列表或误导性的「加载失败」
+    if (isPlaceholderDataset()) {
+      requestAnimationFrame(() => {
+        renderMainStats();
+        renderNoDataState();
+        revealPageContent();
+        hidePageSkeleton();
+      });
+      return;
+    }
+
     const hasIndex = Array.isArray(window.CONTEXT_SESSIONS);
     if (hasIndex) {
       // 索引脚本是阻塞式前置脚本, 到这里数据已就绪 → 下一帧渲染, 保证骨架至少可见一帧
@@ -5257,10 +5312,12 @@
       })
       .catch(() => {
         renderMainStats();
-        renderIndexErrorState();
+        const noData = isPlaceholderDataset();
+        if (noData) renderNoDataState();
+        else renderIndexErrorState();
         revealPageContent();
         hidePageSkeleton();
-        showToast("索引数据加载失败, 请点击刷新重试");
+        showToast(noData ? "尚未生成本地数据, 请先运行 npx magpie-context sync" : "索引数据加载失败, 请点击刷新重试");
       });
   }
 

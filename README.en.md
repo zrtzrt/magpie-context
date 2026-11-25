@@ -15,20 +15,23 @@ Real-time tracking of context window growth curves, token composition (System / 
 * **Lifecycle Events (✂ Compaction & ⚡ Bloat)**: Visual markers on timeline indicating when context compaction/pruning occurred or when large file injections caused a spike.
 * **Turn-by-turn Message Inspector**: Inspect exact payloads sent to models per turn with token badges, search, formatting, and clipboard copy.
 * **Diagnostics & Headroom**: Top token consumers table and contextual health advice against model context window limits.
-* **Full Agent Ecosystem Support**: Works seamlessly across Antigravity, DeepSeek Harness (DSH), Codex, Claude Code, and real-time Magpie gateway traffic.
+* **Three agents with real log parsers**: DeepSeek Harness (DSH), Google Antigravity, and OpenAI Codex. Other sources (Claude Code, OpenCode, Cursor, Cline) are **not** parsed yet, so they produce no drill-down data.
 
 ---
 
 ## 📦 Installation
 
 ```bash
-# Add local plugin to Magpie
-magpie plugin add /Users/reno/Documents/code/tools/magpie-context
+magpie plugin add magpie-context      # from npm
+# or: magpie plugin add github:zrtzrt/magpie-context
 
-# Run background sync daemon
-cd magpie-context
-node daemon.mjs
+# Magpie page plugins run in a sandbox with `connect-src 'none'` and no plugin host,
+# so the page cannot read your disk or fetch anything. Generate the index once:
+npx magpie-context sync     # then reopen the "Context" tab
+npx magpie-context watch    # optional: keep it fresh every 5s
 ```
+
+See [Magpie plugin docs](https://usemagpie.ai/docs/zh/plugins) for the page-plugin contract this follows.
 
 ---
 
