@@ -3,7 +3,7 @@
 [![GitHub](https://img.shields.io/badge/GitHub-zrtzrt%2Fmagpie--context-blue?logo=github)](https://github.com/zrtzrt/magpie-context)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-A cross-agent session content inspector and context evolution monitor plugin designed for [Magpie](https://github.com/yetone/magpie) (inspired by and expanding upon `dsh-context`).
+A cross-agent session content inspector and context evolution monitor **page plugin** designed for [Magpie](https://github.com/yetone/magpie) (inspired by and expanding upon `dsh-context`). Page-only: no gateway middleware and no provider-list permission.
 
 Real-time tracking of context window growth curves, token composition (System / Tools / Messages / Tool Outputs), compaction events (`✂`), and turn-by-turn payload inspection.
 

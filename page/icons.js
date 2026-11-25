@@ -49,7 +49,7 @@ function getIconSvg(idOrIcon, fallbackIcon) {
     return ICONS["opencode-zen-free"];
   }
 
-  // 3. 供应商与客户端语义模糊匹配
+  // 3. 客户端语义模糊匹配
   if (key.includes("antigravity") || key === "agy") return ICONS.antigravity;
   if (key.includes("workbuddy") || key.includes("codebuddy")) return ICONS.workbuddy;
   if (key.includes("trae")) return ICONS["trae-cn"];

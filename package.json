@@ -2,15 +2,13 @@
   "name": "magpie-context",
   "version": "1.0.1",
   "description": "Magpie 上下文透视与增长监控插件 (对标 dsh-context) - 跨 Agent 会话内容与上下文增长可视化、Token 分布及压缩事件追踪",
-  "main": "index.js",
-  "kind": "middleware",
+  "kind": "page",
   "scripts": {
     "test": "node --test --test-concurrency=1 tests/*.test.mjs tests/**/*.test.mjs",
     "sync": "node daemon.mjs --once",
     "watch": "node daemon.mjs"
   },
   "files": [
-    "index.js",
     "daemon.mjs",
     "dsh-events.mjs",
     "dsh-fileops.mjs",
@@ -27,7 +25,6 @@
     "magpie",
     "magpie-plugin",
     "magpie-page",
-    "magpie-middleware",
     "context",
     "context-window",
     "token-growth",
@@ -47,7 +44,7 @@
   },
   "magpie": {
     "name": "上下文",
-    "kind": "middleware",
+    "kind": "page",
     "summary": {
       "zh": "跨 Agent 会话内容与上下文增长可视化插件 - 实时追踪 System/User/Assistant/Tools Token 构成、压缩事件与单轮内容透视 (对标 dsh-context)",
       "en": "Cross-agent context evolution & message inspector - track token composition, compaction events & full turn payloads (inspired by dsh-context)"
@@ -64,9 +61,10 @@
       "icon": "page/icon.svg"
     },
     "permissions": [
-      "usage:summary",
-      "providers:list"
+      "usage:summary"
     ],
-    "middleware": "./index.js"
-  }
+    "title": "上下文",
+    "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiBmaWxsPSJub25lIj4KICA8ZGVmcz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iY3R4IiB4MT0iMyIgeTE9IjMiIHgyPSIyMSIgeTI9IjIxIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiM3QzNBRUQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIwLjUiIHN0b3AtY29sb3I9IiM0RjQ2RTUiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDZCNkQ0Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB4PSIyLjUiIHk9IjIuNSIgd2lkdGg9IjE5IiBoZWlnaHQ9IjE5IiByeD0iNS41IiBmaWxsPSJ1cmwoI2N0eCkiIGZpbGwtb3BhY2l0eT0iMC4xMiIgc3Ryb2tlPSJ1cmwoI2N0eCkiIHN0cm9rZS13aWR0aD0iMS42Ii8+CiAgPHBhdGggZD0iTTYgOC41SDE4TTYgMTJIMTQuNU02IDE1LjVIMTIiIHN0cm9rZT0idXJsKCNjdHgpIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgPGNpcmNsZSBjeD0iMTUuNSIgY3k9IjEzLjUiIHI9IjMuNCIgZmlsbD0iI0ZGRkZGRiIgZmlsbC1vcGFjaXR5PSIwLjcyIiBzdHJva2U9InVybCgjY3R4KSIgc3Ryb2tlLXdpZHRoPSIxLjgiLz4KICA8cGF0aCBkPSJNMTggMTZMMjAuOCAxOC44IiBzdHJva2U9InVybCgjY3R4KSIgc3Ryb2tlLXdpZHRoPSIxLjgiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4="
+  },
+  "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiBmaWxsPSJub25lIj4KICA8ZGVmcz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iY3R4IiB4MT0iMyIgeTE9IjMiIHgyPSIyMSIgeTI9IjIxIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiM3QzNBRUQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIwLjUiIHN0b3AtY29sb3I9IiM0RjQ2RTUiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDZCNkQ0Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB4PSIyLjUiIHk9IjIuNSIgd2lkdGg9IjE5IiBoZWlnaHQ9IjE5IiByeD0iNS41IiBmaWxsPSJ1cmwoI2N0eCkiIGZpbGwtb3BhY2l0eT0iMC4xMiIgc3Ryb2tlPSJ1cmwoI2N0eCkiIHN0cm9rZS13aWR0aD0iMS42Ii8+CiAgPHBhdGggZD0iTTYgOC41SDE4TTYgMTJIMTQuNU02IDE1LjVIMTIiIHN0cm9rZT0idXJsKCNjdHgpIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgPGNpcmNsZSBjeD0iMTUuNSIgY3k9IjEzLjUiIHI9IjMuNCIgZmlsbD0iI0ZGRkZGRiIgZmlsbC1vcGFjaXR5PSIwLjcyIiBzdHJva2U9InVybCgjY3R4KSIgc3Ryb2tlLXdpZHRoPSIxLjgiLz4KICA8cGF0aCBkPSJNMTggMTZMMjAuOCAxOC44IiBzdHJva2U9InVybCgjY3R4KSIgc3Ryb2tlLXdpZHRoPSIxLjgiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4="
 }

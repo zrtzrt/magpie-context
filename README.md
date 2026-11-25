@@ -3,7 +3,7 @@
 [![GitHub](https://img.shields.io/badge/GitHub-zrtzrt%2Fmagpie--context-blue?logo=github)](https://github.com/zrtzrt/magpie-context)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-专为 [Magpie](https://github.com/yetone/magpie) 设计的**跨 Agent 会话内容透视与上下文演进监控插件**（对标并超越 `dsh-context`）。
+专为 [Magpie](https://github.com/yetone/magpie) 设计的**跨 Agent 会话内容透视与上下文演进监控页面插件**（对标并超越 `dsh-context`）。纯页面插件，不含网关中间件，也不申请供应商列表权限。
 
 实时监控各 AI 客户端在交互过程中的上下文增长轨迹、Token 构成（System / Tools / Messages / Tool Outputs）、历史压缩事件（Compaction `✂`）与单轮完整内容透视。
 
@@ -41,7 +41,7 @@
 | ✅ **Google DeepMind Antigravity**（IDE & CLI） | `~/.gemini/antigravity/brain/` 会话目录 | 解析 `usage.jsonl` + 会话 transcript，逐轮还原消息树 |
 | ✅ **OpenAI Codex** | Codex 本地会话日志 | 解析 `token_usage_record`，逐步记录真实 token 用量 |
 
-> **说明**：`index.js` 中的内容识别器还能标注 `claude` / `opencode` / `cursor` / `cline` 等来源名称，但这些客户端目前**尚未接入会话日志解析器**，因此不会生成可下钻的上下文演进数据。上表三类是真正产出完整透视数据的范围。
+> **说明**：`claude` / `opencode` / `cursor` / `cline` 等来源名称目前**尚未接入会话日志解析器**，因此不会生成可下钻的上下文演进数据。上表三类是真正产出完整透视数据的范围。
 >
 > 三类 Agent 的每一步 7 类 Token 构成均按该步真实上下文计算（轮内逐步增长，非整轮共用快照），并以该步真实 prompt 为总量归一，堆叠柱与「实际 Token」始终对齐。
 
