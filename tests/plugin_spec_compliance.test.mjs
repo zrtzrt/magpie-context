@@ -37,6 +37,10 @@ test("package.json: magpie 清单字段齐全且指向真实文件", () => {
   assert.ok(pkg.files.includes(m.page.file), "页面文件必须列入 files");
 });
 
+// 生成物：本机跑 sync 才会写出来，仓库里没有（含真实会话数据，不能入库）。
+// 它们必须列入 files（npm 包由 prepack 写入占位版），但不能要求工作区里存在。
+const GENERATED_PAGE_SCRIPTS = new Set(["context-data.js"]);
+
 test("页面只加载自己的文件，且全部随包发布", () => {
   const html = read("page", "index.html");
   const srcs = [...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/g)].map(m => m[1]);
@@ -46,12 +50,23 @@ test("页面只加载自己的文件，且全部随包发布", () => {
   for (const src of srcs) {
     if (src === "_magpie/bridge.js") continue; // magpie 注入，不在包内
     assert.ok(/^[^:]+$/.test(src), "脚本必须是插件内的相对路径，不能是绝对地址: " + src);
-    assert.ok(exists("page", src), "页面引用的脚本必须存在: " + src);
     assert.ok(
       pkg.files.some(f => f === "page/" + src || f.startsWith("page/") && f.endsWith(src)),
       "页面脚本必须列入 files，否则 npm 装完 404: " + src
     );
+    if (GENERATED_PAGE_SCRIPTS.has(src)) continue; // 由 sync/prepack 生成
+    assert.ok(exists("page", src), "源码脚本必须提交进仓库: " + src);
   }
+});
+
+test("生成物脚本缺失时页面引导，不是白屏", () => {
+  // 从 GitHub 安装时 Magpie 不构建，索引脚本必然 404 —— 这条路径必须已处理
+  const code = read("page", "app.js");
+  assert.match(
+    code,
+    /if \(!Array\.isArray\(list\)\) return true;/,
+    "索引未加载到必须判为「还没有本地数据」，否则显示误导性的加载失败"
+  );
 });
 
 test("不违反沙盒：无内联脚本、无内联事件、无网络请求", () => {
