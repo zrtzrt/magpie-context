@@ -142,6 +142,22 @@ test("打包脚本的日志走 stderr，不污染 npm pack --json", () => {
     "prepack/postpack 引用的脚本必须存在");
 });
 
+test("CLI 写入的是 Magpie 实际加载的那份插件，不是 npx 临时副本", () => {
+  // 用户跑 npx 时命令执行在临时目录里；Magpie 加载的是 ~/.config/magpie/plugins 里那份。
+  // 若按 __dirname 写，数据会落进临时目录，magpie 那边永远是占位索引 —— 这就是"装了却看不到数据"。
+  const code = read("bin", "magpie-context.mjs");
+  assert.ok(code.includes("resolvePageDir"), "CLI 必须解析真正的写入目标");
+  assert.ok(
+    code.indexOf("MAGPIE_CONTEXT_PAGE_DIR") < code.indexOf("loadDaemon()") ||
+      code.includes("process.env.MAGPIE_CONTEXT_PAGE_DIR = target.pageDir"),
+    "必须在 import daemon 之前设置 MAGPIE_CONTEXT_PAGE_DIR（daemon 在模块顶层读取它）"
+  );
+  // bin/ 下每个模块都必须随包发布：缺一个就是运行时 ERR_MODULE_NOT_FOUND
+  for (const file of fs.readdirSync(path.join(ROOT, "bin"))) {
+    assert.ok(pkg.files.includes("bin/" + file), "bin/" + file + " 必须列入 files，否则装完 CLI 直接崩");
+  }
+});
+
 test("CLI 入口存在且 files 收录", () => {
   assert.ok(pkg.bin && pkg.bin["magpie-context"], "需要 bin 入口让用户跑同步命令");
   const binPath = pkg.bin["magpie-context"];

@@ -1,6 +1,6 @@
 {
   "name": "magpie-context",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Magpie 上下文透视插件 — 跨 Agent 会话内容与上下文增长可视化、Token 构成与压缩事件追踪",
   "scripts": {
     "test": "node --test --test-concurrency=1 tests/*.test.mjs tests/**/*.test.mjs",
@@ -15,6 +15,7 @@
   },
   "files": [
     "bin/magpie-context.mjs",
+    "bin/target.mjs",
     "daemon.mjs",
     "dsh-events.mjs",
     "dsh-fileops.mjs",

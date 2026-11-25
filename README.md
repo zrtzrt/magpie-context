@@ -66,6 +66,10 @@ npx magpie-context watch    # 可选：每 5 秒增量同步，保持实时
 npx magpie-context doctor   # 可选：检查数据源与输出是否就绪
 ```
 
+> `npx` 会在临时目录里执行命令，而 Magpie 加载的是 `~/.config/magpie/plugins` 里那份。
+> CLI 会自动把数据写进 **Magpie 实际加载的那份插件目录**（`magpie-context doctor` 会打印它选了哪个、为什么），
+> 所以不会出现「跑了命令但页面还是空的」。要指定别处就设 `MAGPIE_CONTEXT_PAGE_DIR`。
+
 > **为什么安装后还要跑一条命令？**
 > Magpie 的页面插件跑在 `sandbox="allow-scripts"` 的沙盒里，CSP 是 `connect-src 'none'`：
 > 页面既读不了磁盘，也发不出任何请求（连同源 `fetch` 都被拦），而**只有页面的插件不会启动插件宿主**，
