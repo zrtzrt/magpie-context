@@ -1,6 +1,6 @@
 {
   "name": "magpie-context",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Magpie 上下文透视与增长监控插件 (对标 dsh-context) - 跨 Agent 会话内容与上下文增长可视化、Token 分布及压缩事件追踪",
   "main": "index.js",
   "kind": "middleware",
