@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "../..");
@@ -62,7 +62,10 @@ export async function loadDaemon() {
     }
   }
 
-  cachedDaemon = await import(EXPORTED_WRAPPER_PATH);
+  // Windows 上不能直接 import 绝对路径: 盘符会被 ESM 当成 URL scheme,
+  // 报 ERR_UNSUPPORTED_ESM_URL_SCHEME (Received protocol 'd:')。
+  // 必须先转成 file:// URL —— 这一步在 POSIX 上同样正确。
+  cachedDaemon = await import(pathToFileURL(EXPORTED_WRAPPER_PATH).href);
   return cachedDaemon;
 }
 
