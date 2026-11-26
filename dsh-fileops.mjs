@@ -128,6 +128,21 @@ function shorten(text, max) {
   return s.slice(0, limit - 1) + "…";
 }
 
+/**
+ * 判断一个已经归一成正斜杠的路径是否为绝对路径。
+ *
+ * 原来只认 `p.startsWith("/")`, 于是 Windows 盘符路径 (`C:/Users/x/a.js`) 和
+ * UNC 路径 (`//server/share/a.js`) 都被当成相对路径, 会被拼上 cwd 变成
+ * `<cwd>/C:/Users/x/a.js` —— 同一个文件在 Windows 上因此被拆成多个 key,
+ * 文件活动统计里出现重复条目, 行数/次数也被拆散。
+ * @param {string} p 已把反斜杠换成斜杠的路径
+ */
+function isAbsolutePathText(p) {
+  if (typeof p !== "string" || p === "") return false;
+  if (p.startsWith("/")) return true; // POSIX 绝对路径 或 UNC (//server/share)
+  return /^[A-Za-z]:\//.test(p); // Windows 盘符绝对路径
+}
+
 function normalizeOpts(opts) {
   const o = isObject(opts) ? opts : {};
   return {
@@ -170,8 +185,28 @@ function stripQuotes(text) {
 }
 
 /** 词法折叠 . 与 .. (不触碰真实文件系统) */
+/**
+ * 拆出「根前缀」: 盘符 (`C:`) 或 UNC 共享 (`//server/share`) 或 POSIX 的 `/`。
+ * 前缀不参与 ../ 折叠, 也不能被加上额外的前导斜杠 —— 否则 Windows 路径会被
+ * 折叠成 `/C:/Users/x` 这种既不是 POSIX 也不是 Windows 的第三种形态。
+ * @returns {{prefix:string, rest:string, absolute:boolean}}
+ */
+function splitRootPrefix(p) {
+  if (/^[A-Za-z]:\//.test(p)) return { prefix: p.slice(0, 2), rest: p.slice(2), absolute: true };
+  if (p.startsWith("//")) {
+    const parts = p.slice(2).split("/");
+    const server = parts.shift() || "";
+    const share = parts.shift() || "";
+    const prefix = "//" + server + (share ? "/" + share : "");
+    return { prefix, rest: "/" + parts.join("/"), absolute: true };
+  }
+  if (p.startsWith("/")) return { prefix: "", rest: p, absolute: true };
+  return { prefix: "", rest: p, absolute: false };
+}
+
 function collapseSegments(pathText, isAbsolute) {
-  const parts = pathText.split("/");
+  const { prefix, rest } = splitRootPrefix(pathText);
+  const parts = rest.split("/");
   const stack = [];
   for (const part of parts) {
     if (part === "" || part === ".") continue;
@@ -185,8 +220,10 @@ function collapseSegments(pathText, isAbsolute) {
     }
     stack.push(part);
   }
-  if (isAbsolute) return "/" + stack.join("/");
-  return stack.join("/");
+  const joined = stack.join("/");
+  if (prefix) return prefix + "/" + joined;
+  if (isAbsolute) return "/" + joined;
+  return joined;
 }
 
 /**
@@ -213,13 +250,13 @@ export function normalizePath(rawPath, opts = {}) {
     }
   }
 
-  const isAbsolute = p.startsWith("/");
+  const isAbsolute = isAbsolutePathText(p);
   if (!isAbsolute && !unresolvedTilde && o.cwd) {
     const cwd = o.cwd.replace(/\\/g, "/").replace(/\/+$/, "");
     if (cwd !== "") p = cwd + "/" + p;
   }
 
-  const absoluteNow = p.startsWith("/");
+  const absoluteNow = isAbsolutePathText(p);
   const collapsed = collapseSegments(p, absoluteNow);
   if (collapsed === "" || collapsed === ".") {
     return absoluteNow ? "/" : ".";

@@ -1,8 +1,9 @@
 // daemon.mjs - 实时同步与解析 Magpie 上下文透视数据 (直读 usage.jsonl 与各 Agent 真实会话)
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 // DSH 真实事件流折叠器 (zstd 全量解压 + 逐事件统计, 无任何公式/常量兜底)
 import { foldDshSession } from "./dsh-events.mjs";
@@ -10,11 +11,39 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const HOME = process.env.HOME || "";
+
+/**
+ * 解析用户主目录。
+ * 原来直接 `process.env.HOME || ""`, 在 HOME 缺失时 (Windows 的 cmd/PowerShell、
+ * 部分 CI 容器、被 systemd/launchd 清理过环境变量的进程) 会退化成空串 ——
+ * 于是所有数据源路径变成相对路径, 一个会话都读不到, 而 writeContextDataset()
+ * 又会把「没有任何会话」理解成「所有详情分片都过期」, 把 page/data 下的分片全删掉。
+ * 依次尝试 HOME / USERPROFILE / os.homedir(), 并在最后确认目录真实存在。
+ */
+function resolveHomeDir() {
+  const candidates = [process.env.HOME, process.env.USERPROFILE];
+  try {
+    candidates.push(os.homedir());
+  } catch (_) {
+    /* os.homedir() 在极端情况下可能抛错, 忽略 */
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || candidate.trim() === "") continue;
+    const resolved = path.resolve(candidate.trim());
+    try {
+      if (fs.statSync(resolved).isDirectory()) return resolved;
+    } catch (_) {
+      /* 不存在就继续找下一个候选 */
+    }
+  }
+  return "";
+}
+
+const HOME = resolveHomeDir();
+const HOME_RESOLVED = HOME !== "";
 
 const USAGE_JSONL_PATH = path.join(HOME, ".config/magpie/usage.jsonl");
 const SESSIONS_JSON_PATH = path.join(HOME, ".cache/magpie/sessions.json");
-const APP_LOG_PATH = path.join(HOME, "Library/Logs/magpie/app.log");
 // 输出目录: 默认 page/; 测试可用 MAGPIE_CONTEXT_PAGE_DIR 指向临时目录, 避免与并发的 daemon/测试互相覆盖
 const CONTEXT_PAGE_DIR_OVERRIDE = process.env.MAGPIE_CONTEXT_PAGE_DIR
   ? path.resolve(process.env.MAGPIE_CONTEXT_PAGE_DIR)
@@ -1147,6 +1176,59 @@ function parseAntigravitySession(sessionId, cwd, title, start, last, meta, usage
 /**
  * 3. 解析 DSH 真实会话
  */
+
+/** parseDshSession 关心的事件类型 (与原 grep -E 的集合保持一致, 顺序即文件顺序) */
+const DSH_CORE_EVENT_RE =
+  /"(system\/message|request\/header|turn\/start|user\/message|assistant\/message|tool\/call|tool\/result|request\/context|step\/end)"/;
+
+/**
+ * 读取 DSH 会话文件里 parseDshSession 需要的核心事件行。
+ *
+ * 原来这里执行 `zstd -dc file | grep -E ...` 两个外部命令:
+ *  - Windows 默认没有 zstd, 也没有 grep —— 正文解析直接抛错, 逐轮对话退化成 [网关调用];
+ *  - 即使装了, 路径里的引号/反斜杠/非 ASCII 字符经 shell 拼接后行为不确定;
+ *  - 每条会话额外 fork 两个进程, 70 个会话就是 140 次。
+ *
+ * 改为优先用 node:zlib 的 zstdDecompressSync (Node >= 22.15 内置), 不支持时
+ * 才回退到 execFileSync 调 zstd 本体 —— execFileSync 不经 shell, 路径不会被解释,
+ * 也不依赖 grep。
+ * @returns {string[]} 匹配到的原始 JSON 行
+ */
+function readDshCoreEventLines(filePath) {
+  let raw = "";
+  let lastError = null;
+  const buffer = fs.readFileSync(filePath);
+
+  const zstdSync = typeof zlib.zstdDecompressSync === "function" ? zlib.zstdDecompressSync : null;
+  if (zstdSync) {
+    try {
+      raw = zstdSync(buffer).toString("utf8");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (raw === "") {
+    // 回退: 老版本 Node 没有内置 zstd, 用外部命令解压到 stdout (不经 shell)
+    try {
+      raw = execFileSync("zstd", ["-dc", filePath], {
+        encoding: "utf8",
+        maxBuffer: 512 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch (error) {
+      lastError = lastError || error;
+    }
+  }
+
+  if (raw === "") {
+    if (lastError) throw lastError;
+    return [];
+  }
+
+  return raw.split("\n").filter(line => line !== "" && DSH_CORE_EVENT_RE.test(line));
+}
+
 function parseDshSession(filePath, meta, usageReqs = []) {
   const sid = meta?.id || path.basename(path.dirname(filePath));
   let cwd = meta?.cwd || "";
@@ -1167,9 +1249,7 @@ function parseDshSession(filePath, meta, usageReqs = []) {
   // 1. 如果有物理 zstd 会话，解压提取核心事件 (移除 head -n 300 截断)
   if (fs.existsSync(filePath)) {
     try {
-      const cmd = `zstd -dc "${filePath}" 2>/dev/null | grep -E '"(system/message|request/header|turn/start|user/message|assistant/message|tool/call|tool/result|request/context|step/end)"'`;
-      const out = execSync(cmd, { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
-      const lines = out.split("\n").filter(Boolean);
+      const lines = readDshCoreEventLines(filePath);
 
       let curTurn = null;
       let pendingTurn = null;
@@ -4174,7 +4254,14 @@ export function writeContextDataset(sessions, summary) {
     written += 1;
   }
 
-  const removed = cleanupStaleDetailFiles(new Set(Object.keys(nextEntries)));
+  // 安全阀: 只有「本次确实解析出了会话」才允许清理过期分片。
+  // 空 HOME / 数据源整体不可读时 buildContextDataset() 会返回 0 个会话, 而旧代码
+  // 把「没有任何会话」当成「所有分片都过期」, 把 page/data 下的真实数据全删掉 ——
+  // 一次环境变量缺失就能毁掉用户几个月的索引。
+  const removed =
+    safeSessions.length === 0
+      ? []
+      : cleanupStaleDetailFiles(new Set(Object.keys(nextEntries)));
   writeDetailManifest({ version: DETAIL_MANIFEST_VERSION, entries: nextEntries });
 
   const indexContent = buildIndexContent(safeSessions, summary || {}, detailFiles);
@@ -4193,6 +4280,14 @@ export function writeContextDataset(sessions, summary) {
 
 export function syncContextData() {
   const startedAt = Date.now();
+  // 没有可用的主目录时不要继续: 此时所有数据源路径都是空的, 继续跑只会写出
+  // 一份「0 会话」的索引覆盖掉用户已有的真实数据。
+  if (!HOME_RESOLVED) {
+    console.error(
+      "[Daemon] 无法确定用户主目录 (HOME / USERPROFILE 均不可用)，已跳过同步，避免用空数据覆盖已有索引。"
+    );
+    return null;
+  }
   try {
     const { sessions, summary } = buildContextDataset();
     const stats = writeContextDataset(sessions, summary);

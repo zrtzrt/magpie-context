@@ -7,6 +7,7 @@
 // 数据只能由这条命令在本机写进 page/，页面再用自己的 <script src> 加载。
 import process from "node:process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { resolvePageDir, magpiePluginsDir, SELF_ROOT } from "./target.mjs";
 
@@ -74,8 +75,36 @@ async function runWatch() {
   console.log("[magpie-context] 正在同步（每 5 秒）。Ctrl-C 退出。");
 }
 
+/** 与 daemon.mjs 的 resolveHomeDir() 同源逻辑: HOME 缺失时回退 USERPROFILE / os.homedir() */
+function resolveHomeDir() {
+  const candidates = [process.env.HOME, process.env.USERPROFILE];
+  try {
+    candidates.push(os.homedir());
+  } catch (_) {
+    /* ignore */
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || candidate.trim() === "") continue;
+    const resolved = path.resolve(candidate.trim());
+    try {
+      if (fs.statSync(resolved).isDirectory()) return resolved;
+    } catch (_) {
+      /* 继续尝试下一个 */
+    }
+  }
+  return "";
+}
+
 async function runDoctor() {
-  const home = process.env.HOME || "";
+  const home = resolveHomeDir();
+  if (home === "") {
+    console.log("数据源：");
+    console.log("  ✗ 无法确定用户主目录（HOME / USERPROFILE 均不可用），无法定位任何数据源。");
+    return;
+  }
+  if (process.env.HOME !== home) {
+    console.log("主目录：\n  " + home + "（HOME 未设置，由 USERPROFILE / os.homedir() 推断）");
+  }
   const sources = [
     ["Magpie 用量", path.join(home, ".config/magpie/usage.jsonl")],
     ["Magpie 会话", path.join(home, ".cache/magpie/sessions.json")],

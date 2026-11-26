@@ -371,6 +371,45 @@ test("路径归一: 无 cwd / home 时保留可合并的相对形态", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows 路径 (跨平台回归: 盘符 / UNC / 反斜杠)
+// ---------------------------------------------------------------------------
+
+test("路径归一: Windows 盘符路径不被拼上 cwd", () => {
+  const winOpts = { cwd: "C:/work/proj", home: "C:/Users/reno" };
+  // 盘符绝对路径: 必须原样保留, 不能变成 <cwd>/C:/...
+  assert.equal(normalizePath("C:/Users/x/a.js", winOpts), "C:/Users/x/a.js");
+  assert.equal(normalizePath("D:/data/b.js", winOpts), "D:/data/b.js");
+  // 反斜杠形式先归一再判定
+  assert.equal(normalizePath("C:\\Users\\x\\a.js", winOpts), "C:/Users/x/a.js");
+  // 小写盘符同样成立
+  assert.equal(normalizePath("c:/tmp/a.js", winOpts), "c:/tmp/a.js");
+  // ../ 不能越出盘符根, 也不能把盘符挪到斜杠后面
+  assert.equal(normalizePath("C:/Users/x/../a.js", winOpts), "C:/Users/a.js");
+  assert.equal(normalizePath("C:/../a.js", winOpts), "C:/a.js");
+  // 相对路径仍然拼 cwd (Windows cwd)
+  assert.equal(normalizePath("a.js", winOpts), "C:/work/proj/a.js");
+  // ~ 展开到 Windows home
+  assert.equal(normalizePath("~/a.js", winOpts), "C:/Users/reno/a.js");
+});
+
+test("路径归一: UNC 共享路径保持双斜杠", () => {
+  const winOpts = { cwd: "C:/work/proj", home: "C:/Users/reno" };
+  assert.equal(normalizePath("//server/share/a.js", winOpts), "//server/share/a.js");
+  assert.equal(normalizePath("\\\\server\\share\\a.js", winOpts), "//server/share/a.js");
+  assert.equal(normalizePath("//server/share/x/../a.js", winOpts), "//server/share/a.js");
+  // 单个前导斜杠仍是 POSIX 绝对路径, 不能被当成 UNC
+  assert.equal(normalizePath("/tmp/a.js", winOpts), "/tmp/a.js");
+});
+
+test("路径归一: 同一 Windows 文件的不同写法归一成同一个 key", () => {
+  const winOpts = { cwd: "C:/work/proj", home: "C:/Users/reno" };
+  const variants = ["C:\\work\\proj\\a.js", "C:/work/proj/a.js", "C:/work/proj/./a.js", "C:/work/proj/x/../a.js"];
+  const keys = variants.map((v) => normalizePath(v, winOpts));
+  assert.equal(new Set(keys).size, 1, "同一文件的多写法必须归一为同一个 key: " + JSON.stringify(keys));
+  assert.equal(keys[0], "C:/work/proj/a.js");
+});
+
+// ---------------------------------------------------------------------------
 // 行数边界
 // ---------------------------------------------------------------------------
 

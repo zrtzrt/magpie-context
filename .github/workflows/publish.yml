@@ -10,25 +10,32 @@ on:
 
 jobs:
   test:
-    name: Test (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }} / Node ${{ matrix.node }})
+    # 必须跨平台跑: 这个插件读的是本机会话目录, 而 Windows 上 HOME 不存在、
+    # 默认没有 zstd/grep、路径是盘符形式 —— 只在 ubuntu 上跑会让这三类缺陷
+    # 永远绿着进主线 (v1.2.0 就是这么发出去的)。
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         # zstd*Sync 需要 Node >= 22.15; Node 20 缺该 API 会假绿/报错, 故不纳入。
         node: ['22', '24']
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
       - name: Syntax check
+        shell: bash
         run: |
           node -c daemon.mjs
           node -c dsh-events.mjs
           node -c dsh-fileops.mjs
       - name: Run tests
-        run: npm test
+        # 用目录形式而不是 glob: Windows 的 cmd 不会展开 tests/*.test.mjs,
+        # 交给 node --test 自己递归发现, 三个平台行为一致。
+        run: node --test --test-concurrency=1 tests/
 
   publish:
     name: Publish to npm (OIDC Trusted Publishing)
