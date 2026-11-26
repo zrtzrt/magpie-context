@@ -33,9 +33,9 @@ jobs:
           node -c dsh-events.mjs
           node -c dsh-fileops.mjs
       - name: Run tests
-        # 用目录形式而不是 glob: Windows 的 cmd 不会展开 tests/*.test.mjs,
-        # 交给 node --test 自己递归发现, 三个平台行为一致。
-        run: node --test --test-concurrency=1 tests/
+        # 走 npm test -> scripts/run-tests.mjs: 自己枚举测试文件后交给 node --test。
+        # 不能写 glob (Windows cmd 不展开), 也不能写目录 (Node 22/24 不接受位置参数)。
+        run: npm test
 
   publish:
     name: Publish to npm (OIDC Trusted Publishing)
