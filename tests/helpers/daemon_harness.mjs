@@ -82,6 +82,12 @@ export async function withMockAntigravityTranscript(transcriptLines, fn) {
   fs.mkdirSync(brainDir, { recursive: true });
   fs.writeFileSync(transcriptPath, transcriptLines.join("\n") + "\n", "utf8");
 
+  // 时间戳必须在 fixture 建立时取一次并复用。
+  // 原来 parse() 里现场调两次 new Date(), 于是「同一 transcript 解析两次必须
+  // 逐字节一致」这类用例会在跨秒边界上偶发失败 (CI 上真实复现: macOS + Node 24)。
+  // 那是测试输入不确定, 不是解析逻辑不确定 —— 解析本身是确定性的。
+  const fixtureStart = new Date().toISOString();
+
   try {
     const daemon = await loadDaemon();
     return await fn({
@@ -93,8 +99,8 @@ export async function withMockAntigravityTranscript(transcriptLines, fn) {
           testSessionId,
           PROJECT_ROOT,
           "E2E Test Session",
-          new Date().toISOString(),
-          new Date().toISOString(),
+          fixtureStart,
+          fixtureStart,
           meta,
           usageReqs
         );
