@@ -9,6 +9,7 @@ import process from "node:process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolvePageDir, magpiePluginsDir, SELF_ROOT } from "./target.mjs";
 
 const USAGE = [
@@ -34,6 +35,33 @@ const indexPath = path.join(target.pageDir, "context-data.js");
 async function loadDaemon() {
   // daemon.mjs 是唯一的解析与写盘实现，这里不复制逻辑
   return import("../daemon.mjs");
+}
+
+// watch 的同步判定: 抽成纯函数, 因为它有一个不写测试就看不出来的坑 ——
+// 只看「安静」的话, 用户正在使用 agent 时会话文件一直在写, 安静期永远凑不满,
+// 数据在活跃使用期间永不刷新。所以除了安静期, 还要有最大陈旧兜底。
+export function shouldSync(state) {
+  const {
+    signature,
+    observed,
+    lastSynced,
+    stableSince,
+    lastSyncAt,
+    quietMs,
+    maxStaleMs,
+    now
+  } = state;
+  // 数据源还在变化: 只重置安静计时, 不在这里同步（交给下一次 tick 判定）。
+  if (signature !== observed) return { action: "reset" };
+  // 变化过但还没同步过: 安静期满或陈旧超时就同步。
+  if (signature !== lastSynced) {
+    const quiet = now - stableSince >= quietMs;
+    const stale = now - lastSyncAt >= maxStaleMs;
+    if (quiet) return { action: "sync", reason: "quiet" };
+    if (stale) return { action: "sync", reason: "stale" };
+    return { action: "wait" };
+  }
+  return { action: "idle" };
 }
 
 function reportTarget() {
@@ -108,11 +136,20 @@ async function runWatch() {
   const daemon = await loadDaemon();
   const intervalMs = numberArg("interval", 15000);
   const quietMs = numberArg("quiet", 30000);
+  // 只在「安静」后同步会有一个致命副作用: 用户正在用 agent 时, 会话文件一直在写,
+  // 签名每次都变, 安静期永远凑不满, 数据就永远不刷新 —— 而「正在用」恰恰是最想看
+  // 上下文演进的时候。因此再加一条最大陈旧兜底: 超过这个时间即使仍在写入也同步一次。
+  //
+  // 阈值取 5 分钟而不是更短: 本机一次增量同步实测 67–182 秒（取决于多少会话变了）,
+  // 兜底定得太小会让「同步→立刻又过期」连成一片, 占掉一个核。而只要用户停下来,
+  // 安静 30 秒那条路径会立刻刷新 —— 兜底只负责「别永远不刷新」, 不需要高频。
+  const maxStaleMs = numberArg("max-stale", 300000);
   let stopped = false;
   let timer = null;
   let running = false;
   let lastSynced = "";
   let observed = "";
+  let lastSyncAt = Date.now();
 
   const syncNow = () => {
     if (stopped || running) return;
@@ -120,6 +157,7 @@ async function runWatch() {
     try {
       const stats = daemon.syncContextData();
       if (stats) lastSynced = daemon.getDataSourceSignature();
+      lastSyncAt = Date.now();
     } finally {
       running = false;
     }
@@ -134,12 +172,23 @@ async function runWatch() {
     if (stopped) return;
     timer = setTimeout(() => {
       try {
+        const now = Date.now();
         const signature = daemon.getDataSourceSignature();
-        if (signature !== observed) {
+        const decision = shouldSync({
+          signature,
+          observed,
+          lastSynced,
+          stableSince,
+          lastSyncAt,
+          quietMs,
+          maxStaleMs,
+          now
+        });
+        if (decision.action === "reset") {
           // 还有文件在写: 重置安静计时, 等用户停止操作后再解析。
           observed = signature;
-          stableSince = Date.now();
-        } else if (signature !== lastSynced && Date.now() - stableSince >= quietMs) {
+          stableSince = now;
+        } else if (decision.action === "sync") {
           syncNow();
         }
       } catch (error) {
@@ -161,7 +210,8 @@ async function runWatch() {
   process.on("exit", lock.release);
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  console.log("[magpie-context] 正在监视（每 " + Math.round(intervalMs / 1000) + " 秒检查，安静 " + Math.round(quietMs / 1000) + " 秒后同步）。Ctrl-C 退出。");
+  console.log("[magpie-context] 正在监视（每 " + Math.round(intervalMs / 1000) + " 秒检查，安静 "
+    + Math.round(quietMs / 1000) + " 秒后同步；持续写入时最多 " + Math.round(maxStaleMs / 1000) + " 秒也会同步一次）。Ctrl-C 退出。");
 }
 
 /** 与 daemon.mjs 的 resolveHomeDir() 同源逻辑: HOME 缺失时回退 USERPROFILE / os.homedir() */
@@ -240,8 +290,18 @@ async function runDoctor() {
   }
 }
 
+// 只有被直接执行时才跑 CLI: 否则测试 import 本模块拿 shouldSync 会顺带触发一次
+// 全量同步（几十秒 + 写盘），既慢又会污染断言。
+const invokedDirectly = (() => {
+  try {
+    return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+  } catch (_) {
+    return false;
+  }
+})();
+
 const command = process.argv[2] || "sync";
-switch (command) {
+if (invokedDirectly) switch (command) {
   case "sync":
   case "--once":
     await runSync();

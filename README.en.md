@@ -33,6 +33,18 @@ npx magpie-context watch    # optional foreground watcher: poll changes and refr
 
 See [Magpie plugin docs](https://usemagpie.ai/docs/zh/plugins) for the page-plugin contract this follows.
 
+> **Service lifecycle** (check here first when data looks stale)
+> - The background sync process is **detached** on purpose: it outlives the plugin host. A full sync
+>   takes 11–46 s, and the Magpie host restarts whenever another plugin throws — a child that dies
+>   with the host never finishes, which looks like "the service is healthy but the data is old".
+> - Single-instance is enforced by `page/data/.watch.lock`, not by parent shutdown, so host restarts
+>   never spawn a doomed duplicate.
+> - Reloading the plugin in the same process never double-binds the port: state lives on `globalThis`;
+>   if the port is taken by a foreign program the service moves to the next one, and if it is taken by
+>   our own older instance it is reused.
+> - Health: `curl 127.0.0.1:3457/health` reports `watcher`/`watcherPid` based on the real process in the lock file.
+> - Diagnostics: `page/data/.service.log` (truncated past 512 KB).
+
 ---
 
 ## 📄 License
