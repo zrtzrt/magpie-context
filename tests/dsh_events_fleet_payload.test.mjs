@@ -315,7 +315,9 @@ describe("单会话详情分片预算 (≤ 12MB)", () => {
     assert.equal(DSH_PAYLOAD_LIMITS.shardBytes, 12 * 1024 * 1024);
     assert.ok(DSH_PAYLOAD_LIMITS.budgetBytes < DSH_PAYLOAD_LIMITS.shardBytes);
     assert.equal(DSH_BROWSER_LIMITS.keepSteps, 120, "默认只保留最近 120 步明细 (与 daemon 降采样对齐)");
-    assert.deepEqual(DSH_PAYLOAD_LIMITS.keepStepsLadder, [120, 100, 80, 60, 40, 20, 0]);
+    // 最后一档不得为 0: 全清 items 会让页面每一步每个分类都显示「未保留独立条目明细」,
+    // 剩余体积由 daemon 的 trimDetailPayloadInPlace 兜底 (它能同时看到 s.turns)。
+    assert.deepEqual(DSH_PAYLOAD_LIMITS.keepStepsLadder, [120, 100, 80, 60, 40, 20]);
   });
 
   it("超预算的重会话: 真实分片字节 ≤ 12MB, 阶梯降采样, 统计口径不变", () => {
@@ -491,5 +493,33 @@ describe("真实会话抽检 (有真实数据时)", () => {
         }
       }
     }
+  });
+});
+
+describe("技能注入条目", () => {
+  it("skill 分类有 count/tokens 时必须同时有条目明细 (旧实现只有计数没有条目)", () => {
+    const ev = eventBuilder();
+    const events = [
+      ev("session", { cwd: "/tmp", title: "skill-fixture" }),
+      ev("request/header", { header: { tools: [{ name: "skill", description: "d", parameters: { type: "object" } }], config: { provider: "p", model: "m" } }, reason: "initial" }),
+      ev("system/message", { message: { role: "system", content: [{ type: "text", text: "S".repeat(500) }] } }),
+      ev("turn/start", { turn: 1 }),
+      ev("user/message", { turn: 1, step: 1, content: [{ type: "text", text: "use skill" }] }),
+      ev("step/start", { turn: 1, step: 1 }),
+      ev("tool/call", { callId: "s1", name: "skill", arguments: "{\"name\":\"office\"}" }),
+      ev("tool/result", { callId: "s1", message: { role: "tool", toolCallId: "s1", content: [{ type: "text", text: "Skill: office\n" + "K".repeat(9000) }] } }),
+      ev("assistant/message", { turn: 1, step: 1, usage: { inputTokens: 100, outputTokens: 20 }, message: { role: "assistant", content: [{ type: "text", text: "ok" }] } }),
+      ev("step/end", { turn: 1, step: 1 }),
+      ev("turn/end", { turn: 1 })
+    ];
+    const fixture = writeDshSession(events, { id: "sess-skill", sessionId: "sess-skill" });
+    const session = foldDshSession(fixture.filePath, fixture.meta);
+    const step = lastStep(session);
+    const skillCat = categoryOf(step, "skill");
+    assert.ok(skillCat.count > 0, "skill 分类应有真实计数");
+    assert.ok((skillCat.items || []).length > 0, "skill 分类有计数却没有条目明细");
+    const toolCat = categoryOf(step, "tool");
+    const toolItemIds = (toolCat.items || []).map((it) => String(it.id)).join(",");
+    assert.ok(!toolItemIds.includes(":s1"), "已转为 skill 的节点不应同时出现在 tool 条目里: " + toolItemIds);
   });
 });

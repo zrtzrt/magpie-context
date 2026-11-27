@@ -3333,9 +3333,14 @@ function buildDshContextPayload(s) {
       const tokens = Math.round(Math.max(0, Number(breakdown[key]) || 0));
       const percent = sum > 0 ? Math.max(0, Math.min(100, Math.round((tokens / sum) * 100))) : 0;
       const items = grouped.get(key) || [];
+      // count 只报**真实枚举到的条目数**。旧实现用 tokens>0 ? 1 : 0 兜底, 会在
+      // 系统提示词/注入等未逐条采集的分类上谎报「有 1 项」; 改用 hasUnenumerated 标记,
+      // 页面据此显示「有内容但上游未提供逐条明细」, 不再编造条目数。
+      const hasUnenumerated = items.length === 0 && tokens > 0;
       return {
         key, label, name: label,
-        count: items.length > 0 ? items.length : (tokens > 0 ? 1 : 0),
+        count: items.length,
+        hasUnenumerated,
         tokens,
         formatted: formatK(tokens),
         percent,
@@ -3595,7 +3600,8 @@ function buildDshContextPayload(s) {
       breakdown: turnBreakdown,
       browserCategories: browserOf(turnBreakdown, turnTokens).map(c => ({
         key: c.key, name: c.name, count: c.count, tokens: c.tokens,
-        formatted: c.formatted, percent: c.percent, color: c.color
+        formatted: c.formatted, percent: c.percent, color: c.color,
+        hasUnenumerated: c.hasUnenumerated === true
       }))
     });
   });
@@ -4029,16 +4035,124 @@ function trimDetailPayloadInPlace(session) {
     bytes = bytesOf();
   }
 
-  // ③ 仍然超限: 彻底丢弃浏览器条目明细
+  // ②c 仍然超限: 丢弃 turns[].messages 的 thinking / blocks —— 页面只用 fullText 做详情卡兜底,
+  //     这两个字段从不渲染; 大会话里合计可达 7MB, 比条目明细更该先扔。
+  if (bytes > DETAIL_PAYLOAD_SOFT_LIMIT && Array.isArray(session.turns)) {
+    for (const turn of session.turns) {
+      for (const msg of turn && turn.messages ? turn.messages : []) {
+        if (typeof msg.thinking === "string" && msg.thinking !== "") msg.thinking = "";
+        if (Array.isArray(msg.blocks) && msg.blocks.length > 0) msg.blocks = [];
+      }
+    }
+    trims.push("turns.messages.thinking+blocks=0");
+    bytes = bytesOf();
+  }
+
+  // ②d 仍然超限: 丢弃 turns[].messages 的正文 (保留 snippet/title 供列表预览)。
+  //     条目自身仍有 fullText, 详情卡优先用条目正文, 所以主要阅读路径不受影响。
+  if (bytes > DETAIL_PAYLOAD_SOFT_LIMIT && Array.isArray(session.turns)) {
+    for (const turn of session.turns) {
+      for (const msg of turn && turn.messages ? turn.messages : []) {
+        if (typeof msg.fullText === "string" && msg.fullText !== "") msg.fullText = "";
+      }
+    }
+    trims.push("turns.messages.fullText=0");
+    bytes = bytesOf();
+  }
+
+  // ②e 仍然超限: 旧步骤的 DNA 条带丢弃 (保留最近 60 步; 页面会用分类骨架兜底绘制)。
+  if (bytes > DETAIL_PAYLOAD_SOFT_LIMIT && dc && Array.isArray(dc.steps) && dc.steps.length > 60) {
+    const dnaCut = dc.steps.length - 60;
+    for (let i = 0; i < dnaCut; i += 1) {
+      const step = dc.steps[i];
+      if (step && Array.isArray(step.dnaBands) && step.dnaBands.length > 0) step.dnaBands = [];
+    }
+    trims.push("oldSteps.dnaBands=[]");
+    bytes = bytesOf();
+  }
+
+  // ②f 仍然超限: 丢弃 sessionMeta.commandCalls (1024 条去重命令原文, 页面不读)
+  if (bytes > DETAIL_PAYLOAD_SOFT_LIMIT && dc && dc.sessionMeta && Array.isArray(dc.sessionMeta.commandCalls) && dc.sessionMeta.commandCalls.length > 0) {
+    dc.sessionMeta.commandCalls = [];
+    trims.push("sessionMeta.commandCalls=[]");
+    bytes = bytesOf();
+  }
+
+  // ②g 仍然超限: 命令记录瘦身 —— 页面命令卡只用 cmd/program/status/ms/background/time/turn/step/tag,
+  //     label/jobId/outChars/outTruncated/codeMode/nested 均不读; 超长 cmd 原文保留前 300 字符。
+  if (bytes > DETAIL_PAYLOAD_SOFT_LIMIT && dc && Array.isArray(dc.commands) && dc.commands.length > 0) {
+    const KEEP = new Set(["cmd", "program", "status", "ms", "background", "time", "turn", "step", "tag", "tool", "isError", "exitCode", "killed"]);
+    let slimmed = 0;
+    for (const command of dc.commands) {
+      if (!command || typeof command !== "object") continue;
+      for (const key of Object.keys(command)) {
+        if (KEEP.has(key)) continue;
+        delete command[key];
+        slimmed += 1;
+      }
+      if (typeof command.cmd === "string" && command.cmd.length > 300) {
+        command.cmd = command.cmd.slice(0, 300) + "…";
+      }
+    }
+    if (slimmed > 0) {
+      trims.push("commands.slim");
+      bytes = bytesOf();
+    }
+  }
+
+  // ②h 仍然超限: 所有步骤的条目正文折叠 (保留 id/idx/title/toolName/tokens/snippet)
   if (bytes > DETAIL_PAYLOAD_SOFT_LIMIT && dc && Array.isArray(dc.steps)) {
+    let compacted = 0;
     for (const step of dc.steps) {
       const cats = step && step.browserCategories;
       if (!Array.isArray(cats)) continue;
       for (const cat of cats) {
-        if (Array.isArray(cat.items)) cat.items = [];
+        if (!Array.isArray(cat.items) || cat.items.length === 0) continue;
+        if (cat.items.every((it) => it && it.compact === 1)) continue;
+        cat.items = cat.items.map((it) => {
+          const compact = {
+            id: it && it.id, idx: it && it.idx, title: it && it.title,
+            toolName: it && it.toolName, tokens: it && it.tokens, compact: 1
+          };
+          if (it && typeof it.snippet === "string") compact.snippet = it.snippet;
+          return compact;
+        });
+        cat.itemsCompactOnly = true;
+        compacted += 1;
       }
     }
-    trims.push("browserCategories.items=all");
+    if (compacted > 0) {
+      trims.push("browserCategories.compactAll");
+      bytes = bytesOf();
+    }
+  }
+
+  // ③ 最后兜底: 只保留最近 N 步的条目, 其余**显式标记 itemsTrimmed**。
+  //    绝不无条件清空全部 items —— 那样每步 7 个分类都会显示「未保留独立条目明细」,
+  //    而体积主因 (turns 正文 / thinking / blocks / dnaBands) 在前面已经处理掉了。
+  if (bytes > DETAIL_PAYLOAD_SOFT_LIMIT && dc && Array.isArray(dc.steps)) {
+    const keepSteps = 40;
+    const cut = Math.max(0, dc.steps.length - keepSteps);
+    let trimmedCats = 0;
+    for (let i = 0; i < cut; i += 1) {
+      const cats = dc.steps[i] && dc.steps[i].browserCategories;
+      if (!Array.isArray(cats)) continue;
+      for (const cat of cats) {
+        if (Array.isArray(cat.items) && cat.items.length > 0) {
+          cat.items = [];
+          cat.itemsTrimmed = true;
+          trimmedCats += 1;
+        }
+      }
+    }
+    if (trimmedCats > 0) {
+      dc.sessionMeta = dc.sessionMeta || {};
+      const prevKeep = Number(dc.sessionMeta.browserCategoriesKeepSteps);
+      dc.sessionMeta.browserCategoriesKeepSteps = Number.isFinite(prevKeep) && prevKeep > 0
+        ? Math.min(prevKeep, keepSteps)
+        : keepSteps;
+      trims.push("browserCategories.items>" + keepSteps + "steps");
+    }
     bytes = bytesOf();
   }
 

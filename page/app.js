@@ -3871,11 +3871,23 @@
     tool: "#14b8a6"
   };
 
+  /** 解析池化文本: dsh-events 把长正文存进 dshContext.textPool, 条目只留 tx/sx 下标。
+   *  旧实现页面不解析池引用 → 大会话（正文全部池化）点开条目只能看到标题, 误判为「未保留正文」。 */
+  function resolvePooledText(s, index) {
+    if (typeof index !== "number") return "";
+    const pool = s && s.dshContext && s.dshContext.textPool;
+    if (!Array.isArray(pool)) return "";
+    const text = pool[index];
+    return typeof text === "string" ? text : "";
+  }
+
   function getBandFullText(it, s) {
     if (it.fullText && it.fullText.length > 0 && !it.fullText.startsWith("[")) {
       return it.fullText;
     }
-    if (!s || !s.turns) return it.fullText || it.snippet || it.title || "";
+    const pooled = resolvePooledText(s, it.tx);
+    if (pooled.length > 0) return pooled;
+    if (!s || !s.turns) return resolvePooledText(s, it.sx) || it.snippet || it.title || "";
 
     const targetTurnIdx = it.turnIdx || 1;
     const tn = s.turns.find(t => t.turnIdx === targetTurnIdx) || s.turns[targetTurnIdx - 1];
@@ -3902,7 +3914,7 @@
         if (sMsg?.fullText) return sMsg.fullText;
       }
     }
-    return it.fullText || it.snippet || it.title || "";
+    return resolvePooledText(s, it.sx) || it.snippet || it.title || "";
   }
 
   /**
@@ -4440,7 +4452,7 @@
               </svg>
               <span class="cat-sq" style="background: ${c.color};"></span>
               <span class="cat-name">${escapeHtml(c.name)}</span>
-              <span class="cat-count">${c.count} 项</span>
+              <span class="cat-count">${c.count > 0 ? c.count + " 项" : escapeHtml(c.formatted)}</span>
               ${diffBadge}
             </div>
             <div class="cat-head-right">
@@ -4472,14 +4484,16 @@
           const items = c.items || [];
           const catCount = Number(c.count) || 0;
           // 该分类在这一步确实没有任何内容 → 直接不渲染这个空分类(避免整片『暂无』)
-          if (items.length === 0 && catCount === 0) {
+          if (items.length === 0 && catCount === 0 && !c.hasUnenumerated) {
             return;
           }
           if (items.length === 0) {
             const keepSteps = (s && s.dshContext && s.dshContext.sessionMeta && s.dshContext.sessionMeta.browserCategoriesKeepSteps) || 120;
             catBody.innerHTML = c.itemsTrimmed
               ? `<div class="lc-br-folded-hint">该分类明细已折叠（仅保留最近 ${keepSteps} 步全文，${catCount} 项 · 计数与 token 完整）</div>`
-              : `<div class="lc-br-folded-hint">该分类在此步骤有 ${catCount} 项，但未保留独立条目明细</div>`;
+              : c.hasUnenumerated
+                ? `<div class="lc-br-folded-hint">该分类在此步骤共 ${escapeHtml(c.formatted)}，但上游未提供逐条明细</div>`
+                : `<div class="lc-br-folded-hint">该分类在此步骤有 ${catCount} 项，但未保留独立条目明细</div>`;
           } else {
             // 条目行构建 (详情卡延迟到首次展开时才渲染, 见 ensureItemCard)
             const buildAccordionItemRow = (it, itIdx) => {

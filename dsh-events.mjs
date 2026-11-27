@@ -1532,6 +1532,20 @@ export class DshSessionFolder {
           node.cat = "skill";
           this.sums.skill += node.tokens;
           this.catCounts.skill += 1;
+          // catNodes 同步迁移: 只改 surface.cat 会让 skill 分类只有 count/tokens 而没有条目明细,
+          // 页面于是显示「该分类在此步骤有 1 项，但未保留独立条目明细」。
+          const toolRecords = this.catNodes.tool;
+          if (Array.isArray(toolRecords)) {
+            const recordIndex = toolRecords.findIndex((record) => record && record.seq === seq);
+            if (recordIndex >= 0) {
+              const [record] = toolRecords.splice(recordIndex, 1);
+              record.cat = "skill";
+              if (Array.isArray(this.catNodes.skill)) {
+                this.catNodes.skill.push(record);
+                if (this.catNodes.skill.length > 60) this.catNodes.skill.shift();
+              }
+            }
+          }
         }
         this.events.push({
           kind: "inject",
@@ -2194,8 +2208,11 @@ export const DSH_BROWSER_LIMITS = {
  * 单会话详情分片预算。daemon 侧 DETAIL_PAYLOAD_SOFT_LIMIT = 12MB (WKWebView 承受上限),
  * 数据层自己先守住, 并预留 headroom 给 daemon 的包装文本/索引开销:
  *   shardBytes 分片硬上限 12MB;  budgetBytes = shardBytes - headroomBytes (11.5MB)
- *   keepStepsLadder: 超预算时按阶梯减少"保留明细的最近步数"(120→100→80→60→40→20→0),
+ *   keepStepsLadder: 超预算时按阶梯减少"保留明细的最近步数"(120→100→80→60→40→20),
  *     统计口径 (stats/turns/commands/fileOps) 一律不动。
+ *     **最后一档不再是 0**: 全清 items 会让 1500 步会话每一步 7 个分类都显示
+ *     「未保留独立条目明细」; 这里只负责把 dshContext 压到合理范围, 剩余体积由
+ *     daemon 的 trimDetailPayloadInPlace 兜底 (它能看到 s.turns, 裁正文比清条目更有效)。
  */
 export const DSH_PAYLOAD_LIMITS = {
   shardBytes: 12 * 1024 * 1024,
@@ -2203,7 +2220,7 @@ export const DSH_PAYLOAD_LIMITS = {
   get budgetBytes() {
     return this.shardBytes - this.headroomBytes;
   },
-  keepStepsLadder: [120, 100, 80, 60, 40, 20, 0],
+  keepStepsLadder: [120, 100, 80, 60, 40, 20],
   // 估算体积小于这个值时不必真跑 JSON.stringify (小会话零开销)
   probeBytes: 2 * 1024 * 1024
 };
@@ -2566,6 +2583,43 @@ export function applyPayloadBudget(result, keepSteps = DSH_BROWSER_LIMITS.keepSt
     }
     if (bytes <= DSH_PAYLOAD_LIMITS.budgetBytes) break;
   }
+  // 阶梯用尽仍超 12MB 硬上限: 命令记录瘦身 + 丢旧步 DNA 条带 + 清 commandCalls。
+  // 这三项页面都不读原文 (命令卡只用 cmd/program/status/ms/background/time/turn/step),
+  // 比继续清空 items 更划算 —— 明细条目必须留住, 否则每步每类都会显示「未保留独立条目明细」。
+  if (bytes > DSH_PAYLOAD_LIMITS.shardBytes) {
+    let changed = 0;
+    const KEEP_COMMAND_FIELDS = new Set(["cmd", "program", "status", "ms", "background", "time", "turn", "step", "tag", "tool", "isError", "exitCode", "killed"]);
+    for (const command of Array.isArray(result.commands) ? result.commands : []) {
+      if (!command || typeof command !== "object") continue;
+      for (const key of Object.keys(command)) {
+        if (KEEP_COMMAND_FIELDS.has(key)) continue;
+        delete command[key];
+        changed += 1;
+      }
+      if (typeof command.cmd === "string" && command.cmd.length > 300) {
+        command.cmd = command.cmd.slice(0, 300) + "…";
+      }
+    }
+    if (steps.length > 60) {
+      for (let i = 0; i < steps.length - 60; i += 1) {
+        if (steps[i] && Array.isArray(steps[i].dnaBands) && steps[i].dnaBands.length > 0) {
+          steps[i].dnaBands = [];
+          changed += 1;
+        }
+      }
+    }
+    const meta = result.sessionMeta;
+    if (meta && Array.isArray(meta.commandCalls) && meta.commandCalls.length > 0) {
+      meta.commandCalls = [];
+      changed += 1;
+    }
+    if (changed > 0) {
+      report.trimRounds += 1;
+      report.trimmed = true;
+      bytes = measureJsonBytes(result);
+    }
+  }
+
   report.bytes = bytes;
   report.trimmed = report.trimRounds > 0;
   return report;

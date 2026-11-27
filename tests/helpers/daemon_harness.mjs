@@ -39,7 +39,7 @@ export async function loadDaemon() {
       daemonCode.slice(idxEnd) + 
       "\n\n" + 
       payloadCode + 
-      `\nexport { parseAntigravitySession, parseDshSession, buildDshContextPayload, estimateTokens, getModelLimit, formatK };\n`;
+      `\nexport { parseAntigravitySession, parseDshSession, buildDshContextPayload, estimateTokens, getModelLimit, formatK, trimDetailPayloadInPlace };\n`;
   } else {
     wrapperCode = daemonCode + `\nexport { parseAntigravitySession, parseDshSession, estimateTokens, getModelLimit };\n`;
   }
