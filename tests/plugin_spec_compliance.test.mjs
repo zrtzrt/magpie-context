@@ -170,6 +170,26 @@ test("CLI 入口存在且 files 收录", () => {
   }
 });
 
+test("npm test 指向的文件必须随包发布", () => {
+  // 曾经 .npmignore 整目录排除 tests/ 与 scripts/, 而 npm test 指向
+  // scripts/run-tests.mjs —— 从 tarball 安装后跑 npm test 直接
+  // MODULE_NOT_FOUND。CI 跑的是 checkout, 目录都在, 所以永远绿。
+  const testScript = pkg.scripts && pkg.scripts.test;
+  assert.ok(testScript, "package.json 必须有 test 脚本");
+  const runner = testScript.split(/\s+/).find(tok => tok.endsWith(".mjs") || tok.endsWith(".js"));
+  assert.ok(runner, "test 脚本要指向一个具体文件, 否则无从校验: " + testScript);
+  assert.ok(
+    pkg.files.some(f => runner === f || (f.endsWith("/") && runner.startsWith(f))),
+    "test 脚本入口 " + runner + " 必须列入 files, 否则装包后 npm test 直接崩"
+  );
+  // 它枚举的用例目录同样要进包, 否则 runner 跑的是空集合 —— 全绿但什么都没测。
+  const testsDir = runner.replace(/scripts[\\/].*$/, "tests");
+  assert.ok(
+    pkg.files.some(f => f.replace(/\/+$/, "") === testsDir),
+    "tests 目录必须列入 files, 否则装包后测试集为空"
+  );
+});
+
 test("页面在无数据时给出引导，而不是误报加载失败", () => {
   const code = read("page", "app.js");
   assert.ok(code.includes("CONTEXT_DATA_PLACEHOLDER"), "页面要识别打包占位索引");

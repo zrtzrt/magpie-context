@@ -7,12 +7,19 @@
 page/data/
 page/.context-data.local.js
 
-# 恢复过程留档、测试与 CI 配置
+# 恢复过程留档与 CI 配置
 _recovery/
-tests/
-scripts/
 .github/
 RECOVERY-REPORT*.md
+
+# tests/ 与 scripts/ 必须进包: package.json 的 `npm test` 指向
+# scripts/run-tests.mjs, 而它枚举的是 tests/*.test.mjs。曾经这两条目录排除把
+# 整个测试入口挡在包外, 从 tarball 安装后跑 npm test 直接 MODULE_NOT_FOUND ——
+# CI 跑的是 checkout, 所以永远发现不了。排除的只有 harness 的运行期镜像:
+# daemon_harness.mjs 每次 loadDaemon() 都会原子重建它们, 装包后首跑即自动补齐。
+tests/helpers/.daemon_exports.mjs
+tests/helpers/dsh-events.mjs
+tests/helpers/dsh-fileops.mjs
 
 # 系统杂项
 .DS_Store

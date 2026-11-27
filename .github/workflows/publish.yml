@@ -39,6 +39,21 @@ jobs:
         # 走 npm test -> scripts/run-tests.mjs: 自己枚举测试文件后交给 node --test。
         # 不能写 glob (Windows cmd 不展开), 也不能写目录 (Node 22/24 不接受位置参数)。
         run: npm test
+      - name: The packed tarball must be able to run its own tests
+        # 上面那步跑的是 checkout, tests/ 和 scripts/ 都在。装包后才是用户看到的样子:
+        # .npmignore 曾经整目录排除这两者, 于是 npm test 直接 MODULE_NOT_FOUND,
+        # 而 CI 永远绿。这里真装一次包再跑一次, 才谈得上「包能自检」。
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '22'
+        shell: bash
+        run: |
+          TGZ="$(npm pack --silent | tail -n 1)"
+          test -f "$TGZ" || { echo "npm pack 未产出 tarball"; exit 1; }
+          WORK="$(mktemp -d)"
+          cd "$WORK"
+          npm init -y >/dev/null 2>&1
+          npm install "$GITHUB_WORKSPACE/$TGZ" >/dev/null 2>&1
+          cd node_modules/magpie-context
+          npm test
 
   publish:
     name: Publish to npm (OIDC Trusted Publishing)

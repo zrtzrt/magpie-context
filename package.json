@@ -1,6 +1,6 @@
 {
   "name": "magpie-context",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Magpie 上下文透视插件 — 跨 Agent 会话内容与上下文增长可视化、Token 构成与压缩事件追踪",
   "main": "index.js",
   "scripts": {
@@ -29,7 +29,14 @@
     "page/context-data.js",
     "README.md",
     "README.en.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts/run-tests.mjs",
+    "scripts/ensure-placeholder.mjs",
+    "scripts/restore-local.mjs",
+    "tests/",
+    "!tests/helpers/.daemon_exports.mjs",
+    "!tests/helpers/dsh-events.mjs",
+    "!tests/helpers/dsh-fileops.mjs"
   ],
   "keywords": [
     "magpie",
