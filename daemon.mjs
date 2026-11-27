@@ -2459,6 +2459,57 @@ function scanSessionsFromDisk() {
 
   return { files };
 }
+/**
+ * 轻量数据源指纹: 只 stat 文件, 不解析内容。
+ * watch/service 用它判断「是否真的有新会话」以及「是否已经安静下来」，
+ * 避免把 5 秒轮询变成 46 秒全量解析的背靠背循环。
+ */
+export function getDataSourceSignature() {
+  const entries = [];
+  const addFile = (filePath) => {
+    try {
+      const stat = fs.statSync(filePath);
+      entries.push([String(filePath), Math.round(stat.mtimeMs), stat.size]);
+    } catch (_) {
+      /* 文件不存在: 不参与指纹 */
+    }
+  };
+
+  // DSH: ~/.dsh/sessions/<workspace>/<session>/session.v4.jsonl.zstd
+  const dshRoot = path.join(HOME, ".dsh/sessions");
+  try {
+    for (const ws of fs.readdirSync(dshRoot, { withFileTypes: true })) {
+      if (!ws.isDirectory()) continue;
+      const wsDir = path.join(dshRoot, ws.name);
+      for (const sd of fs.readdirSync(wsDir, { withFileTypes: true })) {
+        if (sd.isDirectory()) addFile(path.join(wsDir, sd.name, "session.v4.jsonl.zstd"));
+      }
+    }
+  } catch (_) { /* 没有 DSH 数据源 */ }
+
+  // Antigravity: transcript_full.jsonl / transcript.jsonl
+  const brainRoot = path.join(HOME, ".gemini/antigravity/brain");
+  try {
+    for (const dir of fs.readdirSync(brainRoot, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      const logDir = path.join(brainRoot, dir.name, ".system_generated/logs");
+      addFile(path.join(logDir, "transcript_full.jsonl"));
+      addFile(path.join(logDir, "transcript.jsonl"));
+    }
+  } catch (_) { /* 没有 Antigravity 数据源 */ }
+
+  // Codex: 复用 rollout 收集器; 它只返回元数据, 这里再按文件 stat 归一化
+  try {
+    for (const filePath of Object.keys(collectCodexRolloutMetas())) addFile(filePath);
+  } catch (_) { /* 没有 Codex 数据源 */ }
+
+  addFile(USAGE_JSONL_PATH);
+  addFile(SESSIONS_JSON_PATH);
+
+  entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return stableHash(JSON.stringify(entries));
+}
+
 function loadSessionsIndex() {
   if (fs.existsSync(SESSIONS_JSON_PATH)) {
     try {
@@ -2551,6 +2602,121 @@ export function linkFleetSubagentSessions(sessions, scannedSessionIds) {
   return { total, matched, linked };
 }
 
+function statFileSignature(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    return { mtimeMs: Math.round(stat.mtimeMs), size: stat.size };
+  } catch (_) {
+    return null;
+  }
+}
+
+function buildSessionFingerprint(agent, sid, sourcePath, meta, usageReqs) {
+  const files = [];
+  const addFile = (filePath) => {
+    if (!filePath) return;
+    let resolvedPath = String(filePath);
+    try { resolvedPath = fs.realpathSync(filePath); } catch (_) { /* 保留原路径 */ }
+    const sig = statFileSignature(resolvedPath);
+    if (sig) files.push([resolvedPath, sig.mtimeMs, sig.size]);
+  };
+  if (agent === "antigravity") {
+    const logDir = path.join(HOME, ".gemini/antigravity/brain", String(sid), ".system_generated/logs");
+    addFile(path.join(logDir, "transcript_full.jsonl"));
+    addFile(path.join(logDir, "transcript.jsonl"));
+  } else {
+    addFile(sourcePath);
+  }
+  const metaView = meta ? Object.assign({}, meta) : null;
+  // filePath 由 files 列表单独承载; 同一文件通过软链接/不同挂载点访问时不应让缓存失效。
+  if (metaView) delete metaView.filePath;
+  return stableHash(
+    JSON.stringify({
+      v: PARSE_CACHE_VERSION,
+      agent,
+      sid: String(sid),
+      files,
+      meta: metaView,
+      usage: usageReqs || []
+    })
+  );
+}
+
+function readParseCache() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(CONTEXT_PARSE_CACHE_PATH, "utf8"));
+    if (parsed && parsed.version === PARSE_CACHE_VERSION && parsed.entries && typeof parsed.entries === "object") {
+      return parsed.entries;
+    }
+  } catch (_) {
+    /* 无缓存或缓存损坏: 退回全量解析 */
+  }
+  return {};
+}
+
+function writeParseCache(entries) {
+  try {
+    fs.mkdirSync(CONTEXT_DETAIL_DIR_PATH, { recursive: true });
+    atomicWriteFileSync(
+      CONTEXT_PARSE_CACHE_PATH,
+      JSON.stringify({ version: PARSE_CACHE_VERSION, updatedAt: new Date().toISOString(), entries }, null, 0)
+    );
+  } catch (e) {
+    console.error("[Daemon] 写入解析缓存失败:", e.message);
+  }
+}
+
+function readSessionDetailFile(filePath) {
+  const text = fs.readFileSync(filePath, "utf8");
+  const start = text.indexOf(" = ");
+  const end = text.lastIndexOf(";");
+  if (start < 0 || end <= start) throw new Error("invalid detail shard");
+  return JSON.parse(text.slice(start + 3, end));
+}
+
+function readCachedSession(cacheEntries, cacheKey, fingerprint, sid) {
+  const entry = cacheEntries[cacheKey];
+  if (!entry || entry.fingerprint !== fingerprint || !entry.file) return null;
+  try {
+    const session = readSessionDetailFile(path.join(CONTEXT_DETAIL_DIR_PATH, entry.file));
+    if (!session || String(session.id) !== String(sid)) return null;
+    return session;
+  } catch (_) {
+    return null;
+  }
+}
+
+function markSessionCacheState(session, hit, fingerprint) {
+  if (!session || typeof session !== "object") return;
+  Object.defineProperty(session, "__cacheHit", { value: Boolean(hit), enumerable: false, configurable: true });
+  Object.defineProperty(session, "__cacheFingerprint", { value: fingerprint || "", enumerable: false, configurable: true });
+}
+
+function refreshCachedSessionTimeAgo(session) {
+  if (session && session.lastTime) session.timeAgo = timeAgo(session.lastTime);
+}
+
+function updateParseCache(sessions) {
+  if (!Array.isArray(sessions) || sessions.length === 0) return;
+  const detailFiles = buildDetailFileMap(sessions);
+  const entries = {};
+  for (const session of sessions) {
+    if (!session || session.id === undefined || session.id === null) continue;
+    const id = String(session.id);
+    const fingerprint = session.__cacheFingerprint;
+    const relPath = detailFiles[id];
+    if (!fingerprint || !relPath) continue;
+    entries[`${session.agent || "other"}:${id}`] = {
+      agent: session.agent || "other",
+      id,
+      file: path.basename(relPath),
+      fingerprint,
+      updatedAt: Date.now()
+    };
+  }
+  writeParseCache(entries);
+}
+
 export function buildContextDataset() {
   const sessions = [];
   // 索引里扫描到的全部会话 id (含未加载进 sessions 的): 供子 Agent ↔ 会话映射使用
@@ -2558,6 +2724,10 @@ export function buildContextDataset() {
 
   // 读取 usage.jsonl
   const { reqsBySession, unlinkedRequests } = readUsageRequests();
+  // 增量解析缓存: 源文件 mtime+size / meta / usage 任一变化都会使指纹失效
+  const parseCache = readParseCache();
+  let parseCacheHits = 0;
+  let parseCacheMisses = 0;
 
   // 读取会话索引: 优先 sessions.json (JSON); 若被 Magpie 换成二进制缓存则回退到真实会话目录扫描
   {
@@ -2581,14 +2751,29 @@ export function buildContextDataset() {
         const matchedUsage = reqsBySession.get(sid) || [];
 
         if (agent === "antigravity" && antigravityCount < 25) {
-          sessions.push(parseAntigravitySession(sid, meta.cwd, meta.title, meta.start, meta.last, meta, matchedUsage));
+          const fingerprint = buildSessionFingerprint(agent, sid, meta.filePath || fpath, meta, matchedUsage);
+          const cached = readCachedSession(parseCache, `${agent}:${sid}`, fingerprint, sid);
+          const session = cached || parseAntigravitySession(sid, meta.cwd, meta.title, meta.start, meta.last, meta, matchedUsage);
+          if (cached) { parseCacheHits++; refreshCachedSessionTimeAgo(session); } else { parseCacheMisses++; }
+          markSessionCacheState(session, Boolean(cached), fingerprint);
+          sessions.push(session);
           antigravityCount++;
         } else if (agent === "dsh" && dshCount < 25) {
-          sessions.push(parseDshSession(meta.filePath || fpath, meta, matchedUsage));
+          const fingerprint = buildSessionFingerprint(agent, sid, meta.filePath || fpath, meta, matchedUsage);
+          const cached = readCachedSession(parseCache, `${agent}:${sid}`, fingerprint, sid);
+          const session = cached || parseDshSession(meta.filePath || fpath, meta, matchedUsage);
+          if (cached) { parseCacheHits++; refreshCachedSessionTimeAgo(session); } else { parseCacheMisses++; }
+          markSessionCacheState(session, Boolean(cached), fingerprint);
+          sessions.push(session);
           dshCount++;
         } else if (agent === "codex" && codexCount < 25) {
           // Codex: ~/.codex/archived_sessions/rollout-*.jsonl, 与 DSH/Antigravity 并列的真实数据源
-          sessions.push(parseCodexSession(meta.filePath || fpath, meta, matchedUsage));
+          const fingerprint = buildSessionFingerprint(agent, sid, meta.filePath || fpath, meta, matchedUsage);
+          const cached = readCachedSession(parseCache, `${agent}:${sid}`, fingerprint, sid);
+          const session = cached || parseCodexSession(meta.filePath || fpath, meta, matchedUsage);
+          if (cached) { parseCacheHits++; refreshCachedSessionTimeAgo(session); } else { parseCacheMisses++; }
+          markSessionCacheState(session, Boolean(cached), fingerprint);
+          sessions.push(session);
           codexCount++;
         }
       }
@@ -3842,7 +4027,7 @@ function buildDshContextPayload(s) {
     updatedAt: formatTime(Date.now())
   };
 
-  return { sessions, summary };
+  return { sessions, summary, cacheStats: { hits: parseCacheHits, misses: parseCacheMisses } };
 }
 
 // ==========================================
@@ -3856,11 +4041,14 @@ const PAGE_DIR = path.dirname(CONTEXT_DATA_JS_PATH);
 const CONTEXT_DETAIL_DIR_NAME = "data";
 const CONTEXT_DETAIL_DIR_PATH = path.join(PAGE_DIR, CONTEXT_DETAIL_DIR_NAME);
 const CONTEXT_DETAIL_MANIFEST_PATH = path.join(CONTEXT_DETAIL_DIR_PATH, ".manifest.json");
+const CONTEXT_PARSE_CACHE_PATH = path.join(CONTEXT_DETAIL_DIR_PATH, ".parse-cache.json");
 const CONTEXT_DETAIL_GITIGNORE_PATH = path.join(CONTEXT_DETAIL_DIR_PATH, ".gitignore");
 const CONTEXT_DETAIL_GITIGNORE_CONTENT =
-  "# 自动生成 (daemon.mjs) — 每会话懒加载详情分片, 请勿入库\n*.js\n*.js.tmp\n.manifest.json\n";
+  "# 自动生成 (daemon.mjs) — 每会话懒加载详情分片, 请勿入库\n*.js\n*.js.tmp\n.manifest.json\n.parse-cache.json\n.watch.lock\n";
 const CONTEXT_DATA_VERSION = 2;
 const DETAIL_MANIFEST_VERSION = 2;
+// 增量解析缓存版本: 解析逻辑有实质变化时 +1, 旧缓存自动失效并全量重算。
+const PARSE_CACHE_VERSION = 1;
 const DETAIL_TMP_GRACE_MS = 60 * 1000;
 
 /**
@@ -4342,10 +4530,29 @@ export function writeContextDataset(sessions, summary) {
     const relPath = detailFiles[id];
     if (!relPath) continue;
     const fileName = path.basename(relPath);
-    trimDetailPayloadInPlace(session);
-    const stableHash = detailStableHash(session);
     const previousEntry = previousEntries[fileName];
     const knownSize = existingSizes.get(fileName);
+
+    // 解析缓存命中: 详情分片就是上一次的完整输出, 文件大小未变时直接复用,
+    // 跳过 trim / 223MB 级 JSON 序列化 / sha1 —— 这是秒级 sync 的关键。
+    // 含 fleet 子代理的会话例外: linkFleetSubagentSessions() 会改写匹配结果, 仍需校验哈希。
+    const fleetSubagents = session?.dshContext?.fleet?.subagents;
+    const hasDynamicFleet = Array.isArray(fleetSubagents) && fleetSubagents.length > 0;
+    if (
+      session.__cacheHit === true &&
+      !hasDynamicFleet &&
+      previousEntry &&
+      previousEntry.id === id &&
+      typeof knownSize === "number" &&
+      knownSize === previousEntry.bytes
+    ) {
+      nextEntries[fileName] = previousEntry;
+      unchanged += 1;
+      continue;
+    }
+
+    trimDetailPayloadInPlace(session);
+    const stableHash = detailStableHash(session);
 
     // 内容未变(且文件大小一致) → 不重写, 避免 watch 模式每 5s 的磁盘抖动
     if (
@@ -4403,15 +4610,17 @@ export function syncContextData() {
     return null;
   }
   try {
-    const { sessions, summary } = buildContextDataset();
+    const { sessions, summary, cacheStats } = buildContextDataset();
     const stats = writeContextDataset(sessions, summary);
+    updateParseCache(sessions);
     console.log(
       "[Daemon] Synced context-data.js (v2 index " + (stats.indexBytes / 1024).toFixed(0) + "KB): " +
       stats.sessionCount + " sessions, " + summary.totalTurns + " turns " +
       "(Agents: Antigravity=" + summary.agents.antigravity + ", DSH=" + summary.agents.dsh +
       ", Codex=" + summary.agents.codex + ", Other=" + summary.agents.other + "); " +
       "details=" + stats.detailFileCount + " files (written " + stats.written + ", unchanged " + stats.unchanged +
-      ", removed " + stats.removed.length + ") in " + (Date.now() - startedAt) + "ms"
+      ", removed " + stats.removed.length + "), parse-cache=" + cacheStats.hits + "/" + (cacheStats.hits + cacheStats.misses) +
+      " in " + (Date.now() - startedAt) + "ms"
     );
     return stats;
   } catch (e) {

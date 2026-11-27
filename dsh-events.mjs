@@ -2583,23 +2583,16 @@ export function applyPayloadBudget(result, keepSteps = DSH_BROWSER_LIMITS.keepSt
     }
     if (bytes <= DSH_PAYLOAD_LIMITS.budgetBytes) break;
   }
-  // 阶梯用尽仍超 12MB 硬上限: 命令记录瘦身 + 丢旧步 DNA 条带 + 清 commandCalls。
-  // 这三项页面都不读原文 (命令卡只用 cmd/program/status/ms/background/time/turn/step),
-  // 比继续清空 items 更划算 —— 明细条目必须留住, 否则每步每类都会显示「未保留独立条目明细」。
+  // 阶梯用尽仍超 12MB 硬上限: 丢旧步 DNA 条带 + 清 commandCalls + 丢旧轮正文。
+  //
+  // 这里**不再瘦身 commands**: 命令卡要用 codeMode / label / nested / seq / jobId /
+  // outChars / outTruncated 这些字段区分「代码块 vs CLI」「嵌套 vs 顶层」「第几步」,
+  // 删掉它们页面就会把 run_code 当成普通 shell、把嵌套调用算到顶层 —— 那已经不是
+  // 「只裁剪 UI 明细」而是篡改真实统计。真实数据用例
+  // (dsh_events_real「裁剪只影响 items 明细」) 就是靠 commands 逐字节相等守住这条线。
+  // 需要腾出的字节改从「页面不读的重复结构」里拿: DNA 条带、commandCalls、旧轮 fullText。
   if (bytes > DSH_PAYLOAD_LIMITS.shardBytes) {
     let changed = 0;
-    const KEEP_COMMAND_FIELDS = new Set(["cmd", "program", "status", "ms", "background", "time", "turn", "step", "tag", "tool", "isError", "exitCode", "killed"]);
-    for (const command of Array.isArray(result.commands) ? result.commands : []) {
-      if (!command || typeof command !== "object") continue;
-      for (const key of Object.keys(command)) {
-        if (KEEP_COMMAND_FIELDS.has(key)) continue;
-        delete command[key];
-        changed += 1;
-      }
-      if (typeof command.cmd === "string" && command.cmd.length > 300) {
-        command.cmd = command.cmd.slice(0, 300) + "…";
-      }
-    }
     if (steps.length > 60) {
       for (let i = 0; i < steps.length - 60; i += 1) {
         if (steps[i] && Array.isArray(steps[i].dnaBands) && steps[i].dnaBands.length > 0) {

@@ -32,6 +32,9 @@ jobs:
           node -c daemon.mjs
           node -c dsh-events.mjs
           node -c dsh-fileops.mjs
+          # page.service 入口与 CLI: 语法错误会让插件在宿主里静默不加载
+          node -c index.js
+          node -c bin/magpie-context.mjs
       - name: Run tests
         # 走 npm test -> scripts/run-tests.mjs: 自己枚举测试文件后交给 node --test。
         # 不能写 glob (Windows cmd 不展开), 也不能写目录 (Node 22/24 不接受位置参数)。

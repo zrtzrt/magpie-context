@@ -17,7 +17,7 @@ const USAGE = [
   "",
   "  Usage:",
   "    magpie-context sync     生成/更新一次数据（写完即退出）",
-  "    magpie-context watch    保持同步（每 5 秒一次，Ctrl-C 退出）",
+  "    magpie-context watch    保持同步（轮询变化，安静后自动刷新；Ctrl-C 退出）",
   "    magpie-context doctor   检查数据源、输出位置与写入目标",
   "    magpie-context --help   显示本帮助",
   "",
@@ -60,19 +60,108 @@ async function runSync() {
   console.log("[magpie-context] 完成。「上下文」页里点右上角刷新（或重开页面）即可看到数据。");
 }
 
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error && error.code === "EPERM";
+  }
+}
+
+function acquireWatchLock() {
+  const dataDir = path.join(target.pageDir, "data");
+  fs.mkdirSync(dataDir, { recursive: true });
+  const lockPath = path.join(dataDir, ".watch.lock");
+  try {
+    const current = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    if (current && current.pid && current.pid !== process.pid && isProcessAlive(current.pid)) return null;
+  } catch (_) { /* 无锁或锁损坏: 继续 */ }
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), "utf8");
+  return {
+    path: lockPath,
+    release() {
+      try {
+        const current = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+        if (current && current.pid === process.pid) fs.unlinkSync(lockPath);
+      } catch (_) { /* already gone */ }
+    }
+  };
+}
+
+function numberArg(name, fallback) {
+  const prefix = "--" + name + "=";
+  const found = process.argv.find((arg) => arg.startsWith(prefix));
+  if (!found) return fallback;
+  const value = Number(found.slice(prefix.length));
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
 async function runWatch() {
   reportTarget();
+  const lock = acquireWatchLock();
+  if (!lock) {
+    console.error("[magpie-context] 已有另一个 watch 进程在运行，本进程退出（避免重复扫描和写盘）。");
+    return;
+  }
   const daemon = await loadDaemon();
-  daemon.syncContextData();
-  const timer = setInterval(() => daemon.syncContextData(), 5000);
+  const intervalMs = numberArg("interval", 15000);
+  const quietMs = numberArg("quiet", 30000);
+  let stopped = false;
+  let timer = null;
+  let running = false;
+  let lastSynced = "";
+  let observed = "";
+
+  const syncNow = () => {
+    if (stopped || running) return;
+    running = true;
+    try {
+      const stats = daemon.syncContextData();
+      if (stats) lastSynced = daemon.getDataSourceSignature();
+    } finally {
+      running = false;
+    }
+  };
+
+  // 先同步一次: 首次安装或插件更新后 page/data 为空, 必须立即生成。
+  syncNow();
+  observed = lastSynced;
+
+  let stableSince = Date.now();
+  const tick = () => {
+    if (stopped) return;
+    timer = setTimeout(() => {
+      try {
+        const signature = daemon.getDataSourceSignature();
+        if (signature !== observed) {
+          // 还有文件在写: 重置安静计时, 等用户停止操作后再解析。
+          observed = signature;
+          stableSince = Date.now();
+        } else if (signature !== lastSynced && Date.now() - stableSince >= quietMs) {
+          syncNow();
+        }
+      } catch (error) {
+        console.error("[magpie-context] 检查数据源失败:", error.message);
+      } finally {
+        tick();
+      }
+    }, intervalMs);
+  };
+  tick();
+
   const stop = () => {
-    clearInterval(timer);
+    stopped = true;
+    clearTimeout(timer);
+    lock.release();
     console.log("\n[magpie-context] 已停止同步。");
     process.exit(0);
   };
+  process.on("exit", lock.release);
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  console.log("[magpie-context] 正在同步（每 5 秒）。Ctrl-C 退出。");
+  console.log("[magpie-context] 正在监视（每 " + Math.round(intervalMs / 1000) + " 秒检查，安静 " + Math.round(quietMs / 1000) + " 秒后同步）。Ctrl-C 退出。");
 }
 
 /** 与 daemon.mjs 的 resolveHomeDir() 同源逻辑: HOME 缺失时回退 USERPROFILE / os.homedir() */

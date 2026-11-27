@@ -2,6 +2,7 @@
   "name": "magpie-context",
   "version": "1.2.2",
   "description": "Magpie 上下文透视插件 — 跨 Agent 会话内容与上下文增长可视化、Token 构成与压缩事件追踪",
+  "main": "index.js",
   "scripts": {
     "test": "node scripts/run-tests.mjs",
     "sync": "node bin/magpie-context.mjs sync",
@@ -14,6 +15,7 @@
     "magpie-context": "bin/magpie-context.mjs"
   },
   "files": [
+    "index.js",
     "bin/magpie-context.mjs",
     "bin/target.mjs",
     "daemon.mjs",
@@ -68,7 +70,14 @@
         "ja": "コンテキスト"
       },
       "file": "page/index.html",
-      "icon": "page/icon.svg"
+      "icon": "page/icon.svg",
+      "service": {
+        "port": 3457,
+        "option": "port"
+      }
+    },
+    "options": {
+      "port": 3457
     },
     "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiBmaWxsPSJub25lIj4KICA8ZGVmcz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iY3R4IiB4MT0iMyIgeTE9IjMiIHgyPSIyMSIgeTI9IjIxIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiM3QzNBRUQiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIwLjUiIHN0b3AtY29sb3I9IiM0RjQ2RTUiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDZCNkQ0Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB4PSIyLjUiIHk9IjIuNSIgd2lkdGg9IjE5IiBoZWlnaHQ9IjE5IiByeD0iNS41IiBmaWxsPSJ1cmwoI2N0eCkiIGZpbGwtb3BhY2l0eT0iMC4xMiIgc3Ryb2tlPSJ1cmwoI2N0eCkiIHN0cm9rZS13aWR0aD0iMS42Ii8+CiAgPHBhdGggZD0iTTYgOC41SDE4TTYgMTJIMTQuNU02IDE1LjVIMTIiIHN0cm9rZT0idXJsKCNjdHgpIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgPGNpcmNsZSBjeD0iMTUuNSIgY3k9IjEzLjUiIHI9IjMuNCIgZmlsbD0iI0ZGRkZGRiIgZmlsbC1vcGFjaXR5PSIwLjcyIiBzdHJva2U9InVybCgjY3R4KSIgc3Ryb2tlLXdpZHRoPSIxLjgiLz4KICA8cGF0aCBkPSJNMTggMTZMMjAuOCAxOC44IiBzdHJva2U9InVybCgjY3R4KSIgc3Ryb2tlLXdpZHRoPSIxLjgiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K"
   }
