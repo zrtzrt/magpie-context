@@ -71,12 +71,24 @@ test("缓存命中的会话内容与全量解析一致 (timeAgo 除外)", () => 
   const cachedSession = cached.sessions.find((session) => session.id === sessionId);
   assert.ok(cachedSession);
   const normalizedCached = Object.assign({}, cachedSession, { timeAgo: "" });
+  // start/last 必须与建缓存时用的值一致, 否则这个用例在跨秒边界上会偶发失败 ——
+  // startTime/lastTime 是 formatTime(start)/formatTime(last) 的直接派生,
+  // 用 new Date() 现场取时间, 缓存里存的是上一秒, 两者必然不等 (CI 上真实发生过:
+  // ubuntu/Windows + Node 22 报 07:31:02 vs 07:31:01, 与代码正确性无关)。
+  // 直接从缓存里的 "YYYY-MM-DD HH:MM:SS" 还原本地时间, 保证 formatTime 得到同一个值。
+  const fromClockText = (text) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(text || ""));
+    if (!m) return new Date(1794469443975).toISOString();
+    return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).toISOString();
+  };
+  const cachedStart = cachedSession.startTime;
+  const cachedLast = cachedSession.lastTime;
   const fullSession = daemon.parseAntigravitySession(
     sessionId,
     "",
     "cache test",
-    new Date().toISOString(),
-    new Date().toISOString(),
+    fromClockText(cachedStart),
+    fromClockText(cachedLast),
     { agent: "antigravity", id: sessionId },
     []
   );
