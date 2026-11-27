@@ -672,7 +672,13 @@
     modalSkeletonTimer = setTimeout(() => {
       modalSkeletonTimer = null;
       if (skel) { skel.style.display = "none"; skel.style.opacity = ""; }
-      if (body) body.style.display = "flex";
+      if (body) {
+        body.style.display = "flex";
+        // 骨架屏退场后内容淡入上浮: 避免大块内容硬切造成的「卡一下」观感
+        body.classList.remove("lc-reveal");
+        void body.offsetWidth; // 强制回流, 让动画在同一会话内可重复触发
+        body.classList.add("lc-reveal");
+      }
     }, 160);
   }
 
@@ -1183,6 +1189,78 @@
   // ==========================================================================
   // 弹窗内部：100% 对齐 dsh-context 官方视觉规范的数据渲染引擎
   // ==========================================================================
+
+  // --------------------------------------------------------------------------
+  // 窗口化列表 (弹窗内的大列表专用)
+  //
+  // 命令卡 / 文件卡原来一次性 innerHTML 全量渲染并逐条绑监听器。实测最大会话
+  // 单次弹窗产出 143,886 个 DOM 节点 (命令列表独占 108,979), 渲染耗时 1057ms,
+  // 4x CPU 降速 (接近 WKWebView 实感) 下 3612ms —— 这才是「打开很慢」的根因,
+  // 数据加载只占 148~984ms。
+  //
+  // 现在首屏只渲染一页, 滚动接近底部或点「加载更多」再追加; 交互统一委托到
+  // 容器, 节点数从 O(全部) 降到 O(一页)。
+  // --------------------------------------------------------------------------
+  const LIST_PAGE_SIZE = 80;
+
+  function mountWindowedList(container, config) {
+    if (!container) return;
+    const state = container.__lcWindowed || { bound: false };
+    state.items = Array.isArray(config.items) ? config.items : [];
+    state.renderItem = config.renderItem;
+    state.onClick = config.onClick || null;
+    state.pageSize = config.pageSize || LIST_PAGE_SIZE;
+    state.rendered = 0;
+    container.__lcWindowed = state;
+
+    container.innerHTML = "";
+    if (state.items.length === 0) {
+      container.innerHTML = config.emptyHtml || "";
+      return;
+    }
+
+    if (!state.bound) {
+      state.bound = true;
+      // 事件委托: 一个监听器服务全部条目 (含后续追加的), 不再逐条 bind
+      container.addEventListener("click", (ev) => {
+        const cur = container.__lcWindowed;
+        if (!cur) return;
+        if (ev.target.closest(".lc-list-more")) {
+          cur.append();
+          return;
+        }
+        if (cur.onClick) cur.onClick(ev, container);
+      });
+      container.addEventListener("scroll", () => {
+        const cur = container.__lcWindowed;
+        if (!cur || cur.appending) return;
+        // 距底 240px 时预取下一页, 滚动过程中基本感觉不到等待
+        if (container.scrollTop + container.clientHeight >= container.scrollHeight - 240) cur.append();
+      }, { passive: true });
+    }
+
+    state.append = function append() {
+      const total = state.items.length;
+      if (state.rendered >= total) return;
+      state.appending = true;
+      const to = Math.min(total, state.rendered + state.pageSize);
+      const html = state.items.slice(state.rendered, to).map(state.renderItem).join("");
+      state.rendered = to;
+      const foot = container.querySelector(".lc-list-foot");
+      if (foot) foot.remove();
+      container.insertAdjacentHTML("beforeend", html);
+      if (state.rendered < total) {
+        container.insertAdjacentHTML("beforeend",
+          '<div class="lc-list-foot"><button type="button" class="lc-list-more">加载更多 · 还有 ' + (total - state.rendered) + ' 条</button></div>');
+      } else if (total > state.pageSize) {
+        container.insertAdjacentHTML("beforeend",
+          '<div class="lc-list-foot lc-list-end">已全部显示 · 共 ' + total + ' 条</div>');
+      }
+      state.appending = false;
+    };
+
+    state.append();
+  }
 
   function renderModalAllViews(s) {
     if (!s) return;
@@ -4703,7 +4781,7 @@
       return;
     }
 
-    elFaListContainer.innerHTML = filtered.map(f => {
+    const renderFileItem = (f) => {
       const glyph = getFileLangGlyph(f.path);
       const lastSlash = f.path.lastIndexOf("/");
       const dir = lastSlash >= 0 ? f.path.slice(0, lastSlash + 1) : "";
@@ -4755,13 +4833,18 @@
           </div>
         </div>
       `;
-    }).join("");
+    };
 
-    elFaListContainer.querySelectorAll(".lc-fa-item").forEach(item => {
-      item.querySelector(".lc-fa-row").addEventListener("click", () => {
+    mountWindowedList(elFaListContainer, {
+      items: filtered,
+      renderItem: renderFileItem,
+      onClick: (ev) => {
+        const item = ev.target.closest(".lc-fa-item");
+        if (!item) return;
+        if (!ev.target.closest(".lc-fa-row") && !ev.target.closest(".lc-fa-toggle")) return;
         item.classList.toggle("open");
         item.classList.toggle("lc-fa-item-on");
-      });
+      }
     });
   }
 
@@ -4881,11 +4964,11 @@
       const emptyText = commands.length === 0
         ? "本会话没有执行过命令"
         : "没有匹配当前过滤条件的命令";
-      elCmdListContainer.innerHTML = `<div class="lc-empty lc-lane">${emptyText}</div>`;
+      mountWindowedList(elCmdListContainer, { items: [], emptyHtml: `<div class="lc-empty lc-lane">${emptyText}</div>` });
       return;
     }
 
-    elCmdListContainer.innerHTML = filtered.map(c => {
+    const renderCmdItem = (c) => {
       const isOk = c.status !== "failed" && c.status !== "killed";
       const durText = c.ms ? (c.ms >= 1000 ? `≈${(c.ms/1000).toFixed(1)}s` : `≈${c.ms}ms`) : "<10ms";
       const timeStr = c.time || "";
@@ -4911,21 +4994,21 @@
           </div>
         </div>
       `;
-    }).join("");
+    };
 
-    elCmdListContainer.querySelectorAll(".lc-cmd-item").forEach(item => {
-      item.querySelector(".lc-cmd-row-line").addEventListener("click", () => {
-        item.classList.toggle("open");
-      });
-      const copyBtn = item.querySelector(".lc-br-copy-btn");
-      if (copyBtn) {
-        copyBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
+    mountWindowedList(elCmdListContainer, {
+      items: filtered,
+      renderItem: renderCmdItem,
+      onClick: (ev) => {
+        const item = ev.target.closest(".lc-cmd-item");
+        if (!item) return;
+        if (ev.target.closest(".lc-br-copy-btn")) {
+          ev.stopPropagation();
           const cmdText = item.querySelector("code")?.textContent || "";
-          navigator.clipboard.writeText(cmdText).then(() => {
-            showToast("已复制命令文本");
-          });
-        });
+          navigator.clipboard.writeText(cmdText).then(() => showToast("已复制命令文本"));
+          return;
+        }
+        if (ev.target.closest(".lc-cmd-row-line")) item.classList.toggle("open");
       }
     });
   }

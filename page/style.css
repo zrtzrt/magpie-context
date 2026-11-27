@@ -5049,3 +5049,78 @@ button.lc-brief-row-link {
 .fleet-dash { flex: none; font-size: 11px; color: var(--muted); }
 .fleet-text { font-size: 11px; }
 
+
+/* ==========================================================================
+   列表窗口化 + 弹窗入场动画
+
+   命令卡原来一次性渲染 8383 条 (108,979 个 DOM 节点), 是弹窗打开卡顿的
+   主因。现在首屏只渲染一页, 滚动到底部自动续页; 这里的样式负责:
+   ① 「加载更多」与「已全部显示」脚注;
+   ② 追加条目的淡入, 让续页不是硬跳;
+   ③ 弹窗主体首次出现时的整体淡入上浮。
+   ========================================================================== */
+.lc-list-foot {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 10px 0 4px;
+  flex: none;
+}
+
+.lc-list-more {
+  font: inherit;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary, var(--muted));
+  background: var(--dsw-alias-bg-layer-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--dsw-alias-border-l2, var(--line-2));
+  border-radius: 999px;
+  padding: 5px 16px;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.lc-list-more:hover {
+  color: var(--dsw-alias-label-primary, var(--fg));
+  background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08));
+  border-color: var(--dsw-alias-brand-primary, #6366f1);
+}
+
+.lc-list-more:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary, #6366f1);
+  outline-offset: 2px;
+}
+
+.lc-list-end {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+/* 续页条目淡入: 只作用于追加批次, 首屏不闪 */
+@keyframes lc-list-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+.lc-cmd-item, .lc-fa-item {
+  animation: lc-list-in 0.18s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-cmd-item, .lc-fa-item { animation: none; }
+  .lc-list-more { transition: none; }
+}
+
+/* 弹窗详情首次出现: 轻微上浮淡入, 让「骨架屏 → 内容」不是硬切 */
+@keyframes lc-modal-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.modal-body.dsh-dashboard-body.lc-reveal {
+  animation: lc-modal-in 0.22s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-body.dsh-dashboard-body.lc-reveal { animation: none; }
+}
