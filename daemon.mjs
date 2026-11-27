@@ -294,6 +294,20 @@ export function unwrapArg(val) {
 }
 
 /**
+ * 判断一个已经归一成正斜杠的路径是否为绝对路径。
+ *
+ * 只认 `p.startsWith("/")` 会把 Windows 盘符路径 (`C:/Users/x/a.js`) 当成相对路径，
+ * 于是被拼上 cwd 变成 `<cwd>/C:/Users/x/a.js` —— 同一个文件在 Windows 上被拆成
+ * 多个 key，文件活动统计出现重复条目。UNC 路径 (`//server/share/a.js`) 因为也以
+ * `/` 开头，反而侥幸没坏。
+ */
+function isAbsolutePathText(p) {
+  if (typeof p !== "string" || p === "") return false;
+  if (p.startsWith("/")) return true; // POSIX 绝对路径 或 UNC (//server/share)
+  return /^[A-Za-z]:\//.test(p); // Windows 盘符绝对路径
+}
+
+/**
  * 路径规范化 (剥除引号、file:// 前缀，统一斜杠，解析工作区相对路径)
  */
 export function normalizePath(rawPath, cwd = "") {
@@ -308,7 +322,7 @@ export function normalizePath(rawPath, cwd = "") {
   p = p.replace(/\\/g, "/");
   p = p.replace(/^(?:\.\/)+/, "");
 
-  if (cwd && !p.startsWith("/") && p !== ".") {
+  if (cwd && !isAbsolutePathText(p) && p !== ".") {
     const normCwd = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
     p = normCwd + "/" + p;
   }

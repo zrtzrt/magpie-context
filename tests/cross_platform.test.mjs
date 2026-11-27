@@ -150,3 +150,30 @@ describe("跨平台: DSH 正文解析不依赖 zstd/grep 外部命令", () => {
     assert.equal(session.currentTokens, 0, "损坏文件的真实上下文 token 必须是 0, 实际: " + session.currentTokens);
   });
 });
+
+// 上面第 3 类缺陷 (盘符/UNC 路径) 原本只写在文件头注释里, 没有对应用例。
+// 结果是修复只落到了 dsh-fileops.mjs, daemon.mjs 里那份同名但独立实现的
+// normalizePath 一直没修 —— 文件活动统计在 Windows 上仍把同一个文件拆成多个 key。
+// 这组用例直接钉住 daemon 那一份的行为。
+describe("跨平台: 盘符与 UNC 路径不得被拼上 cwd", () => {
+  let daemon;
+  before(async () => {
+    daemon = await loadDaemon();
+  });
+
+  it("⑥ Windows 盘符绝对路径原样保留", () => {
+    assert.equal(daemon.normalizePath("C:/Users/x/a.txt", "/repo"), "C:/Users/x/a.txt");
+    assert.equal(daemon.normalizePath("D:\\proj\\b.js", "/repo"), "D:/proj/b.js");
+    assert.equal(daemon.normalizePath("c:/lower/z.js", "/repo"), "c:/lower/z.js");
+  });
+
+  it("⑦ UNC 路径原样保留, POSIX 绝对路径不受影响", () => {
+    assert.equal(daemon.normalizePath("//server/share/c.txt", "/repo"), "//server/share/c.txt");
+    assert.equal(daemon.normalizePath("/abs/d.txt", "/repo"), "/abs/d.txt");
+  });
+
+  it("⑧ 相对路径仍然正确拼接 cwd (修复不得误伤正常解析)", () => {
+    assert.equal(daemon.normalizePath("rel/e.txt", "/repo"), "/repo/rel/e.txt");
+    assert.equal(daemon.normalizePath("rel/e.txt", ""), "rel/e.txt");
+  });
+});
