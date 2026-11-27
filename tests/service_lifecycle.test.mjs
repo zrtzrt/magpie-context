@@ -164,3 +164,18 @@ test("锁里已有存活 watcher 时不再重复 spawn, 且 health 如实报告"
     service.__service.resetState();
   }
 });
+// 收尾: 任何用例都不该把 watcher 或锁留给后面的文件。
+// 这里清一次是必要的 —— 一个残留的存活 watcher 会让 service_manifest 的
+// health.watcher === false 断言在 CI 上全红（本机因为已有真 watcher 反而看不出来）。
+test.after(async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const dataDir = path.join(ROOT, "page", "data");
+  const lockPath = path.join(dataDir, ".watch.lock");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    const pid = Number(parsed && parsed.pid);
+    if (Number.isInteger(pid) && pid > 0) { try { process.kill(pid, "SIGKILL"); } catch (_) { /* gone */ } }
+  } catch (_) { /* 没有锁就是干净的 */ }
+  try { fs.unlinkSync(lockPath); } catch (_) { /* ignore */ }
+});

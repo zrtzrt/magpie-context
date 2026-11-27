@@ -18,8 +18,7 @@ const DEFAULT_PORT = 3457;
 const PORT_SCAN_LIMIT = 10;
 const SERVICE_HOST = "127.0.0.1";
 const SERVICE_ID = "magpie-context";
-// 测试可覆盖: 用一个立刻退出的假 CLI 验证 watcher 崩溃不会波及宿主。
-const CLI_PATH = process.env.MAGPIE_CONTEXT_CLI_PATH || path.join(__dirname, "bin", "magpie-context.mjs");
+const DEFAULT_CLI_PATH = path.join(__dirname, "bin", "magpie-context.mjs");
 const IS_BUN = Boolean(process.versions && process.versions.bun);
 const STATE_KEY = Symbol.for("magpie-context.service-state");
 const LOG_MAX_BYTES = 512 * 1024;
@@ -87,9 +86,13 @@ function startWatcher() {
   const state = serviceState();
   if (state.watcher && state.watcher.exitCode === null && !state.watcher.killed) return;
   if (lockWatcherPid() !== null) return;
+  // 必须在 spawn 时解析, 不能在模块加载时固化: 否则测试里覆盖
+  // MAGPIE_CONTEXT_CLI_PATH 不生效, 会意外启动真 CLI（真 CLI 会写 .watch.lock
+  // 并留下存活进程, 把后续用例的 health 断言全部污染）。
+  const cliPath = process.env.MAGPIE_CONTEXT_CLI_PATH || DEFAULT_CLI_PATH;
   const args = IS_BUN
-    ? ["run", CLI_PATH, "watch", "--interval=60000", "--quiet=30000"]
-    : [CLI_PATH, "watch", "--interval=60000", "--quiet=30000"];
+    ? ["run", cliPath, "watch", "--interval=60000", "--quiet=30000"]
+    : [cliPath, "watch", "--interval=60000", "--quiet=30000"];
   const logFd = openWatcherLogFd();
   try {
     const child = spawn(process.execPath, args, {

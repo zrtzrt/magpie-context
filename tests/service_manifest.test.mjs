@@ -29,6 +29,16 @@ test("index.js 导出插件函数并兼容 default/server 两种加载方式", (
 test("MAGPIE_CONTEXT_SERVICE_DISABLE=1 时调用不启动子进程或端口", async () => {
   const old = process.env.MAGPIE_CONTEXT_SERVICE_DISABLE;
   process.env.MAGPIE_CONTEXT_SERVICE_DISABLE = "1";
+  // health.watcher 现在按 .watch.lock 里的真实进程判断（detached watcher 会跨宿主
+  // 生命周期存活）。因此断言「本实例没有起 watcher」之前必须先清掉可能存在的残留锁，
+  // 否则前一个测试文件留下的 watcher 会让这条断言在 CI 上莫名其妙地红。
+  const lockPath = path.join(ROOT, "page", "data", ".watch.lock");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    const pid = Number(parsed && parsed.pid);
+    if (Number.isInteger(pid) && pid > 0) { try { process.kill(pid, "SIGKILL"); } catch (_) { /* gone */ } }
+  } catch (_) { /* 没有锁 */ }
+  try { fs.unlinkSync(lockPath); } catch (_) { /* ignore */ }
   try {
     const service = require(path.join(ROOT, "index.js"));
     const result = await service({}, {});
